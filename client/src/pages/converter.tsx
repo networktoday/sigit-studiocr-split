@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useDropzone } from "react-dropzone";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import {
   ShieldCheck,
   ShieldX,
   Pencil,
-  Check,
+  Play,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
@@ -26,6 +26,7 @@ interface FileItem {
   id: string;
   name: string;
   size: number;
+  file: File;
   status: ProcessingStep;
   progress: number;
 }
@@ -60,32 +61,51 @@ export default function Converter() {
   const [isCompleted, setIsCompleted] = useState(false);
   const [conversionResult, setConversionResult] = useState<ConversionResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState(false);
   const [customName, setCustomName] = useState("");
-  const [isRenaming, setIsRenaming] = useState(false);
+  const [isStaged, setIsStaged] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+  const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
 
     setErrorMessage(null);
+    setIsCompleted(false);
+    setConversionResult(null);
+
     const newFiles = acceptedFiles.map((file) => ({
       id: Math.random().toString(36).substring(7),
       name: file.name,
       size: file.size,
-      status: "uploading" as ProcessingStep,
+      file,
+      status: "pending" as ProcessingStep,
       progress: 0,
     }));
 
     setFiles(newFiles);
+    setIsStaged(true);
+
+    if (acceptedFiles.length === 1) {
+      const baseName = acceptedFiles[0].name.replace(/\.pdf$/i, "");
+      setCustomName(baseName);
+    } else {
+      setCustomName("");
+    }
+  }, []);
+
+  const startConversion = async () => {
+    if (files.length === 0) return;
+
     setIsProcessing(true);
-    setIsCompleted(false);
-    setConversionResult(null);
+    setErrorMessage(null);
 
     const formData = new FormData();
-    acceptedFiles.forEach((file) => {
-      formData.append("files", file);
+    files.forEach((f) => {
+      formData.append("files", f.file);
     });
+
+    if (customName.trim() && files.length === 1) {
+      formData.append("customName", customName.trim());
+    }
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -111,13 +131,10 @@ export default function Converter() {
       const result: ConversionResult = await response.json();
       setConversionResult(result);
 
-      const firstFile = result.files[0];
-      const baseName = firstFile.wasSplit ? firstFile.outputName : firstFile.outputName.replace(/\.pdf$/i, "");
-      setCustomName(baseName);
-
       setFiles((prev) => prev.map((f) => ({ ...f, status: "done", progress: 100 })));
       setIsProcessing(false);
       setIsCompleted(true);
+      setIsStaged(false);
 
       toast({
         title: "Conversione Completata",
@@ -136,10 +153,19 @@ export default function Converter() {
         variant: "destructive",
       });
     }
-  }, []);
+  };
 
   const removeFile = (id: string) => {
-    setFiles((prev) => prev.filter((f) => f.id !== id));
+    setFiles((prev) => {
+      const updated = prev.filter((f) => f.id !== id);
+      if (updated.length === 0) {
+        setIsStaged(false);
+        setCustomName("");
+      } else if (updated.length === 1) {
+        setCustomName(updated[0].name.replace(/\.pdf$/i, ""));
+      }
+      return updated;
+    });
   };
 
   const clearAll = () => {
@@ -151,69 +177,8 @@ export default function Converter() {
     setIsProcessing(false);
     setConversionResult(null);
     setErrorMessage(null);
-    setEditingName(false);
     setCustomName("");
-  };
-
-  const handleRename = async () => {
-    if (!conversionResult || !customName.trim()) return;
-    setIsRenaming(true);
-    try {
-      const response = await fetch(`/api/rename/${conversionResult.sessionId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newBaseName: customName.trim() }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.message || "Errore durante la rinomina");
-      }
-
-      const data = await response.json();
-      const renamedFiles = data.files as { oldName: string; newName: string; size: number }[];
-
-      setConversionResult((prev) => {
-        if (!prev) return prev;
-        const updatedFiles = prev.files.map((file) => {
-          if (file.wasSplit && file.partsDetail) {
-            const newBase = customName.trim().replace(/[<>:"/\\|?*]/g, "_");
-            return {
-              ...file,
-              outputName: newBase,
-              partsDetail: file.partsDetail.map((part, i) => {
-                const renamed = renamedFiles.find((r) => r.oldName === part.name);
-                return {
-                  ...part,
-                  name: renamed ? renamed.newName : `${newBase}_parte${i + 1}.pdf`,
-                };
-              }),
-            };
-          } else {
-            const renamed = renamedFiles.find((r) => r.oldName === file.outputName);
-            return {
-              ...file,
-              outputName: renamed ? renamed.newName : file.outputName,
-            };
-          }
-        });
-        return { ...prev, files: updatedFiles };
-      });
-
-      setEditingName(false);
-      toast({
-        title: "File rinominati",
-        description: `I file sono stati rinominati con successo.`,
-      });
-    } catch (err: any) {
-      toast({
-        title: "Errore",
-        description: err.message || "Errore durante la rinomina",
-        variant: "destructive",
-      });
-    } finally {
-      setIsRenaming(false);
-    }
+    setIsStaged(false);
   };
 
   const handleDownload = () => {
@@ -241,7 +206,7 @@ export default function Converter() {
           </p>
         </header>
 
-        {!isProcessing && !isCompleted && (
+        {!isProcessing && !isCompleted && !isStaged && (
           <DropzoneArea onDrop={onDrop} />
         )}
 
@@ -268,7 +233,7 @@ export default function Converter() {
               <CardContent className="p-0">
                 <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
                   <span className="font-medium font-mono text-sm text-muted-foreground">SESSIONE: {new Date().toLocaleDateString()}</span>
-                  {(isCompleted || errorMessage) && (
+                  {(isStaged || isCompleted || errorMessage) && !isProcessing && (
                     <Button data-testid="button-clear" variant="ghost" size="sm" onClick={clearAll} className="h-8 text-xs hover:bg-destructive/10 hover:text-destructive transition-colors">
                       Ricomincia
                     </Button>
@@ -277,12 +242,39 @@ export default function Converter() {
                 <div className="divide-y max-h-[500px] overflow-y-auto">
                   <AnimatePresence>
                     {files.map((file) => (
-                      <FileRow key={file.id} file={file} onRemove={removeFile} isLocked={isProcessing} />
+                      <FileRow key={file.id} file={file} onRemove={removeFile} isLocked={isProcessing || isCompleted} />
                     ))}
                   </AnimatePresence>
                 </div>
               </CardContent>
             </Card>
+
+            {isStaged && !isProcessing && files.length === 1 && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-muted/50 rounded-lg p-4"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Pencil className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Nome file generato</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    data-testid="input-custom-name"
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && startConversion()}
+                    className="text-sm"
+                    placeholder="Inserisci il nome del file..."
+                  />
+                  <span className="text-sm text-muted-foreground shrink-0">.pdf</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  Modifica il nome prima della conversione. Se il file viene diviso, le parti saranno nominate come: {customName || "nome"}_parte1.pdf, {customName || "nome"}_parte2.pdf, ecc.
+                </p>
+              </motion.div>
+            )}
 
             {isCompleted && conversionResult && (
               <motion.div
@@ -294,60 +286,6 @@ export default function Converter() {
                   <Archive className="h-5 w-5 text-primary" />
                   Riepilogo File Generati
                 </h3>
-
-                {conversionResult.files.length === 1 && (
-                <div className="bg-muted/50 rounded-lg p-3 mb-3 flex items-center gap-2">
-                  <Pencil className="h-4 w-4 text-muted-foreground shrink-0" />
-                  {editingName ? (
-                    <div className="flex items-center gap-2 flex-1">
-                      <Input
-                        data-testid="input-rename"
-                        value={customName}
-                        onChange={(e) => setCustomName(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleRename()}
-                        className="h-8 text-sm"
-                        placeholder="Nome del file..."
-                        disabled={isRenaming}
-                      />
-                      <Button
-                        data-testid="button-confirm-rename"
-                        size="sm"
-                        onClick={handleRename}
-                        disabled={isRenaming || !customName.trim()}
-                        className="h-8 px-3 gap-1"
-                      >
-                        {isRenaming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                        Applica
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setEditingName(false)}
-                        disabled={isRenaming}
-                        className="h-8 px-2"
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2 flex-1">
-                      <span className="text-sm text-muted-foreground">
-                        Nome file: <span className="font-medium text-foreground">{customName}</span>
-                      </span>
-                      <Button
-                        data-testid="button-edit-name"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setEditingName(true)}
-                        className="h-7 px-2 text-xs text-primary hover:text-primary/80"
-                      >
-                        <Pencil className="h-3 w-3 mr-1" />
-                        Rinomina
-                      </Button>
-                    </div>
-                  )}
-                </div>
-                )}
 
                 <div className="bg-muted/50 rounded-lg p-4 space-y-3">
                   {conversionResult.files.map((file, index) => {
@@ -402,6 +340,16 @@ export default function Converter() {
             )}
 
             <div className="flex justify-end pt-4">
+              {isStaged && !isProcessing && (
+                <Button
+                  data-testid="button-convert"
+                  size="lg"
+                  onClick={startConversion}
+                  className="w-full md:w-auto gap-2 shadow-xl shadow-primary/20"
+                >
+                  <Play className="h-4 w-4" /> Converti in PDF/A
+                </Button>
+              )}
               {isCompleted ? (
                 <Button
                   data-testid="button-download"
@@ -548,6 +496,7 @@ function FileRow({
             )}
           </div>
 
+          {file.status !== "pending" && (
           <div className="space-y-1">
             <div className="flex justify-between text-xs font-medium">
               <span className={file.status === "done" ? "text-emerald-600" : file.status === "error" ? "text-destructive" : "text-primary"}>
@@ -557,6 +506,7 @@ function FileRow({
             </div>
             <Progress value={file.progress} className="h-1.5" />
           </div>
+          )}
         </div>
       </div>
     </motion.div>

@@ -187,6 +187,10 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Nessun file caricato" });
     }
 
+    const customName = typeof req.body?.customName === "string" && req.body.customName.trim()
+      ? req.body.customName.trim().replace(/[<>:"/\\|?*]/g, "_")
+      : null;
+
     const sessionId = Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
     const sessionDir = path.join(OUTPUT_DIR, sessionId);
     const splitDir = path.join(sessionDir, "split");
@@ -199,14 +203,16 @@ export async function registerRoutes(
     const results: ConvertedFile[] = [];
 
     try {
-      for (const file of files) {
+      for (let fi = 0; fi < files.length; fi++) {
+        const file = files[fi];
         const originalName = Buffer.from(file.originalname, 'latin1').toString('utf8');
-        const baseName = path.parse(originalName).name;
+        const originalBaseName = path.parse(originalName).name;
+        const outputBaseName = (customName && files.length === 1) ? customName : originalBaseName;
         const stat = fs.statSync(file.path);
 
-        log(`Processing: ${originalName} (${(stat.size / 1024 / 1024).toFixed(2)} MB)`);
+        log(`Processing: ${originalName} (${(stat.size / 1024 / 1024).toFixed(2)} MB) → output as "${outputBaseName}"`);
 
-        const tempConvertedPath = path.join(splitDir, `${baseName}_pdfa_full.pdf`);
+        const tempConvertedPath = path.join(splitDir, `${originalBaseName}_pdfa_full.pdf`);
 
         try {
           log(`Converting to PDF/A: ${originalName}`);
@@ -221,11 +227,11 @@ export async function registerRoutes(
 
         if (convertedSize > MAX_SIZE_BYTES) {
           log(`Output > 9MB, splitting converted PDF/A with QPDF...`);
-          const parts = await splitToFitSize(tempConvertedPath, convertedDir, baseName, MAX_SIZE_BYTES);
+          const parts = await splitToFitSize(tempConvertedPath, convertedDir, outputBaseName, MAX_SIZE_BYTES);
 
           const partsDetail: PartVerification[] = [];
           for (let i = 0; i < parts.length; i++) {
-            const finalName = `${baseName}_parte${i + 1}.pdf`;
+            const finalName = `${outputBaseName}_parte${i + 1}.pdf`;
             const finalPath = path.join(convertedDir, finalName);
             if (parts[i] !== finalPath) {
               fs.renameSync(parts[i], finalPath);
@@ -241,7 +247,7 @@ export async function registerRoutes(
           const allVerified = partsDetail.every(p => p.verified);
           results.push({
             originalName,
-            outputName: baseName,
+            outputName: outputBaseName,
             outputSize: partsDetail.reduce((acc, f) => acc + f.size, 0),
             wasSplit: true,
             parts: partsDetail.length,
@@ -250,7 +256,8 @@ export async function registerRoutes(
             partsDetail,
           });
         } else {
-          const finalPath = path.join(convertedDir, originalName);
+          const outputFileName = `${outputBaseName}.pdf`;
+          const finalPath = path.join(convertedDir, outputFileName);
           fs.renameSync(tempConvertedPath, finalPath);
 
           const verification = await verifyPdfA(finalPath);
@@ -258,7 +265,7 @@ export async function registerRoutes(
 
           results.push({
             originalName,
-            outputName: originalName,
+            outputName: outputFileName,
             outputSize: convertedSize,
             wasSplit: false,
             verified: verification.valid,
@@ -269,11 +276,11 @@ export async function registerRoutes(
         try { fs.unlinkSync(file.path); } catch {}
       }
 
-      const originalNames = files.map(f => {
+      const zipBaseName = customName && files.length === 1 ? customName : files.map(f => {
         const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
         return path.parse(name).name;
-      });
-      fs.writeFileSync(path.join(sessionDir, "original_names.json"), JSON.stringify(originalNames));
+      }).join("_");
+      fs.writeFileSync(path.join(sessionDir, "original_names.json"), JSON.stringify([zipBaseName]));
 
       return res.json({
         sessionId,
@@ -288,66 +295,6 @@ export async function registerRoutes(
       }
       return res.status(500).json({ message: err.message || "Errore durante la conversione" });
     }
-  });
-
-  app.post("/api/rename/:sessionId", (req, res) => {
-    const { sessionId } = req.params;
-    const { newBaseName } = req.body;
-    const sessionDir = path.join(OUTPUT_DIR, sessionId);
-    const convertedDir = path.join(sessionDir, "converted");
-
-    if (!newBaseName || typeof newBaseName !== "string" || newBaseName.trim().length === 0) {
-      return res.status(400).json({ message: "Nome non valido" });
-    }
-
-    if (!fs.existsSync(convertedDir)) {
-      return res.status(404).json({ message: "Sessione non trovata" });
-    }
-
-    const metaPath = path.join(sessionDir, "original_names.json");
-    if (fs.existsSync(metaPath)) {
-      try {
-        const names: string[] = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
-        if (names.length > 1) {
-          return res.status(400).json({ message: "La rinomina non è disponibile per sessioni con più file originali" });
-        }
-      } catch {}
-    }
-
-    const sanitized = newBaseName.trim().replace(/[<>:"/\\|?*]/g, "_");
-    const pdfFiles = fs.readdirSync(convertedDir).filter(f => f.endsWith(".pdf")).sort();
-
-    const renamedFiles: { oldName: string; newName: string; size: number }[] = [];
-
-    if (pdfFiles.length === 1) {
-      const oldPath = path.join(convertedDir, pdfFiles[0]);
-      const newName = `${sanitized}.pdf`;
-      const newPath = path.join(convertedDir, newName);
-      fs.renameSync(oldPath, newPath);
-      renamedFiles.push({ oldName: pdfFiles[0], newName, size: fs.statSync(newPath).size });
-    } else {
-      const tempNames: { oldPath: string; newName: string }[] = [];
-      for (let i = 0; i < pdfFiles.length; i++) {
-        const oldPath = path.join(convertedDir, pdfFiles[i]);
-        const newName = `${sanitized}_parte${i + 1}.pdf`;
-        tempNames.push({ oldPath, newName });
-      }
-      for (const { oldPath, newName } of tempNames) {
-        const tmpPath = oldPath + ".tmp_rename";
-        fs.renameSync(oldPath, tmpPath);
-      }
-      for (let i = 0; i < tempNames.length; i++) {
-        const tmpPath = tempNames[i].oldPath + ".tmp_rename";
-        const newPath = path.join(convertedDir, tempNames[i].newName);
-        fs.renameSync(tmpPath, newPath);
-        renamedFiles.push({ oldName: pdfFiles[i], newName: tempNames[i].newName, size: fs.statSync(newPath).size });
-      }
-    }
-
-    fs.writeFileSync(path.join(sessionDir, "original_names.json"), JSON.stringify([sanitized]));
-
-    log(`Renamed files in session ${sessionId}: ${renamedFiles.map(r => r.newName).join(", ")}`);
-    return res.json({ files: renamedFiles });
   });
 
   app.get("/api/download/:sessionId", (req, res) => {
