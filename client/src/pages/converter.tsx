@@ -100,6 +100,12 @@ export default function Converter() {
     setFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
+  const clearAll = () => {
+    setFiles([]);
+    setIsCompleted(false);
+    setIsProcessing(false);
+  };
+
   const handleDownload = () => {
     toast({
       title: "Download avviato",
