@@ -47,36 +47,72 @@ async function splitToFitSize(inputPath: string, outputDir: string, baseName: st
 
   let tmpCounter = 0;
 
-  async function extractPages(start: number, end: number): Promise<string[]> {
+  async function tryExtract(start: number, end: number): Promise<{ path: string; size: number }> {
     tmpCounter++;
     const tmpPath = path.join(outputDir, `${baseName}__tmp_${tmpCounter}.pdf`);
-
     await execFileAsync("qpdf", [
       inputPath,
       "--pages", inputPath, `${start}-${end}`, "--",
       tmpPath,
     ]);
-
-    const partSize = fs.statSync(tmpPath).size;
-
-    if (partSize <= maxSize) {
-      return [tmpPath];
-    }
-
-    if (start === end) {
-      log(`  Warning: single page ${start} is ${(partSize / 1024 / 1024).toFixed(2)} MB (exceeds limit), keeping as-is`);
-      return [tmpPath];
-    }
-
-    fs.unlinkSync(tmpPath);
-
-    const mid = Math.floor((start + end) / 2);
-    const leftParts = await extractPages(start, mid);
-    const rightParts = await extractPages(mid + 1, end);
-    return [...leftParts, ...rightParts];
+    const size = fs.statSync(tmpPath).size;
+    return { path: tmpPath, size };
   }
 
-  return await extractPages(1, totalPages);
+  async function findMaxPages(start: number, maxEnd: number): Promise<{ endPage: number; filePath: string }> {
+    let result = await tryExtract(start, maxEnd);
+    if (result.size <= maxSize) {
+      return { endPage: maxEnd, filePath: result.path };
+    }
+    fs.unlinkSync(result.path);
+
+    if (start === maxEnd) {
+      log(`  Warning: single page ${start} is ${(result.size / 1024 / 1024).toFixed(2)} MB (exceeds limit), keeping as-is`);
+      const single = await tryExtract(start, start);
+      return { endPage: start, filePath: single.path };
+    }
+
+    let lo = start;
+    let hi = maxEnd - 1;
+    let bestEnd = start;
+    let bestPath = "";
+
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      result = await tryExtract(start, mid);
+
+      if (result.size <= maxSize) {
+        if (bestPath) {
+          try { fs.unlinkSync(bestPath); } catch {}
+        }
+        bestEnd = mid;
+        bestPath = result.path;
+        lo = mid + 1;
+      } else {
+        fs.unlinkSync(result.path);
+        hi = mid - 1;
+      }
+    }
+
+    if (!bestPath) {
+      const single = await tryExtract(start, start);
+      return { endPage: start, filePath: single.path };
+    }
+
+    return { endPage: bestEnd, filePath: bestPath };
+  }
+
+  const parts: string[] = [];
+  let currentPage = 1;
+
+  while (currentPage <= totalPages) {
+    const { endPage, filePath } = await findMaxPages(currentPage, totalPages);
+    parts.push(filePath);
+    log(`  Split: pages ${currentPage}-${endPage} (${(fs.statSync(filePath).size / 1024 / 1024).toFixed(2)} MB)`);
+    currentPage = endPage + 1;
+  }
+
+  return parts;
 }
 
 async function convertToPdfA(inputPath: string, outputPath: string): Promise<void> {
