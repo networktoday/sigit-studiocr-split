@@ -230,14 +230,14 @@ export default function Converter() {
                             {file.originalName} &rarr; diviso in {file.partsDetail.length} parti
                           </div>
                           {file.partsDetail.map((part, i) => (
-                            <div key={`${index}-part-${i}`} className="flex justify-between items-center text-sm pl-4">
-                              <span className="flex items-center gap-2">
+                            <div key={`${index}-part-${i}`} data-testid={`row-part-${index}-${i}`} className="flex justify-between items-center text-sm pl-4">
+                              <span data-testid={`text-part-name-${index}-${i}`} className="flex items-center gap-2">
                                 <FileCheck className="h-4 w-4 text-emerald-500" />
                                 {part.name}
                               </span>
                               <div className="flex items-center gap-3">
                                 <PdfaBadge verified={part.verified} conformance={part.conformance} />
-                                <span className="font-mono text-muted-foreground">
+                                <span data-testid={`text-part-size-${index}-${i}`} className="font-mono text-muted-foreground">
                                   {(part.size / 1024 / 1024).toFixed(2)} MB
                                 </span>
                               </div>
@@ -248,14 +248,14 @@ export default function Converter() {
                     }
 
                     return (
-                      <div key={index} className="flex justify-between items-center text-sm">
-                        <span className="flex items-center gap-2">
+                      <div key={index} data-testid={`row-file-${index}`} className="flex justify-between items-center text-sm">
+                        <span data-testid={`text-output-name-${index}`} className="flex items-center gap-2">
                           <FileCheck className="h-4 w-4 text-emerald-500" />
                           {file.outputName}
                         </span>
                         <div className="flex items-center gap-3">
                           <PdfaBadge verified={file.verified} conformance={file.conformance} />
-                          <span className="font-mono text-muted-foreground">
+                          <span data-testid={`text-output-size-${index}`} className="font-mono text-muted-foreground">
                             {(file.outputSize / 1024 / 1024).toFixed(2)} MB
                           </span>
                         </div>
