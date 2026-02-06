@@ -376,8 +376,27 @@ export default function Converter() {
 }
 
 function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
+  const [rejectionError, setRejectionError] = useState<string | null>(null);
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
+    onDrop: (accepted, rejected) => {
+      if (rejected.length > 0) {
+        const nonPdf = rejected.filter((r) =>
+          r.errors.some((e) => e.code === "file-invalid-type")
+        );
+        if (nonPdf.length > 0) {
+          const names = nonPdf.map((r) => r.file.name).join(", ");
+          setRejectionError(`I seguenti file non sono in formato PDF e non possono essere caricati: ${names}`);
+        } else {
+          setRejectionError("Alcuni file superano il limite di 50MB.");
+        }
+      } else {
+        setRejectionError(null);
+      }
+      if (accepted.length > 0) {
+        onDrop(accepted);
+      }
+    },
     accept: {
       "application/pdf": [".pdf"],
     },
@@ -434,6 +453,13 @@ function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
         </div>
         <input {...getInputProps()} />
       </div>
+
+      {rejectionError && (
+        <div data-testid="text-rejection-error" className="mt-3 bg-destructive/10 border border-destructive/30 rounded-lg p-3 text-sm text-destructive flex items-center gap-2">
+          <X className="h-4 w-4 shrink-0" />
+          <span>{rejectionError}</span>
+        </div>
+      )}
     </div>
   );
 }
