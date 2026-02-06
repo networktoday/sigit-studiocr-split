@@ -45,55 +45,38 @@ async function splitToFitSize(inputPath: string, outputDir: string, baseName: st
     return [inputPath];
   }
 
-  const avgPageSize = fileSize / totalPages;
-  const pagesPerPart = Math.max(1, Math.floor(maxSize / avgPageSize));
+  let tmpCounter = 0;
 
-  const parts: string[] = [];
-  let startPage = 1;
-  let partIndex = 1;
-
-  while (startPage <= totalPages) {
-    const endPage = Math.min(startPage + pagesPerPart - 1, totalPages);
-    const partPath = path.join(outputDir, `${baseName}__tmp_part${partIndex}.pdf`);
+  async function extractPages(start: number, end: number): Promise<string[]> {
+    tmpCounter++;
+    const tmpPath = path.join(outputDir, `${baseName}__tmp_${tmpCounter}.pdf`);
 
     await execFileAsync("qpdf", [
       inputPath,
-      "--pages", inputPath, `${startPage}-${endPage}`, "--",
-      partPath,
+      "--pages", inputPath, `${start}-${end}`, "--",
+      tmpPath,
     ]);
 
-    const partSize = fs.statSync(partPath).size;
-    if (partSize > maxSize && endPage > startPage) {
-      fs.unlinkSync(partPath);
-      const halfPages = Math.max(1, Math.floor((endPage - startPage + 1) / 2));
-      const firstHalfEnd = startPage + halfPages - 1;
+    const partSize = fs.statSync(tmpPath).size;
 
-      const firstPath = path.join(outputDir, `${baseName}__tmp_part${partIndex}.pdf`);
-      await execFileAsync("qpdf", [
-        inputPath,
-        "--pages", inputPath, `${startPage}-${firstHalfEnd}`, "--",
-        firstPath,
-      ]);
-      parts.push(firstPath);
-      partIndex++;
-
-      const secondPath = path.join(outputDir, `${baseName}__tmp_part${partIndex}.pdf`);
-      await execFileAsync("qpdf", [
-        inputPath,
-        "--pages", inputPath, `${firstHalfEnd + 1}-${endPage}`, "--",
-        secondPath,
-      ]);
-      parts.push(secondPath);
-      partIndex++;
-    } else {
-      parts.push(partPath);
-      partIndex++;
+    if (partSize <= maxSize) {
+      return [tmpPath];
     }
 
-    startPage = endPage + 1;
+    if (start === end) {
+      log(`  Warning: single page ${start} is ${(partSize / 1024 / 1024).toFixed(2)} MB (exceeds limit), keeping as-is`);
+      return [tmpPath];
+    }
+
+    fs.unlinkSync(tmpPath);
+
+    const mid = Math.floor((start + end) / 2);
+    const leftParts = await extractPages(start, mid);
+    const rightParts = await extractPages(mid + 1, end);
+    return [...leftParts, ...rightParts];
   }
 
-  return parts;
+  return await extractPages(1, totalPages);
 }
 
 async function convertToPdfA(inputPath: string, outputPath: string): Promise<void> {
