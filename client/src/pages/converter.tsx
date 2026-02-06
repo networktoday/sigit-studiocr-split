@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,10 @@ import {
   Archive,
   ShieldCheck,
   ShieldX,
+  Pencil,
+  Check,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "@/hooks/use-toast";
 
@@ -57,6 +60,9 @@ export default function Converter() {
   const [isCompleted, setIsCompleted] = useState(false);
   const [conversionResult, setConversionResult] = useState<ConversionResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [editingName, setEditingName] = useState(false);
+  const [customName, setCustomName] = useState("");
+  const [isRenaming, setIsRenaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -105,6 +111,10 @@ export default function Converter() {
       const result: ConversionResult = await response.json();
       setConversionResult(result);
 
+      const firstFile = result.files[0];
+      const baseName = firstFile.wasSplit ? firstFile.outputName : firstFile.outputName.replace(/\.pdf$/i, "");
+      setCustomName(baseName);
+
       setFiles((prev) => prev.map((f) => ({ ...f, status: "done", progress: 100 })));
       setIsProcessing(false);
       setIsCompleted(true);
@@ -141,6 +151,69 @@ export default function Converter() {
     setIsProcessing(false);
     setConversionResult(null);
     setErrorMessage(null);
+    setEditingName(false);
+    setCustomName("");
+  };
+
+  const handleRename = async () => {
+    if (!conversionResult || !customName.trim()) return;
+    setIsRenaming(true);
+    try {
+      const response = await fetch(`/api/rename/${conversionResult.sessionId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newBaseName: customName.trim() }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err.message || "Errore durante la rinomina");
+      }
+
+      const data = await response.json();
+      const renamedFiles = data.files as { oldName: string; newName: string; size: number }[];
+
+      setConversionResult((prev) => {
+        if (!prev) return prev;
+        const updatedFiles = prev.files.map((file) => {
+          if (file.wasSplit && file.partsDetail) {
+            const newBase = customName.trim().replace(/[<>:"/\\|?*]/g, "_");
+            return {
+              ...file,
+              outputName: newBase,
+              partsDetail: file.partsDetail.map((part, i) => {
+                const renamed = renamedFiles.find((r) => r.oldName === part.name);
+                return {
+                  ...part,
+                  name: renamed ? renamed.newName : `${newBase}_parte${i + 1}.pdf`,
+                };
+              }),
+            };
+          } else {
+            const renamed = renamedFiles.find((r) => r.oldName === file.outputName);
+            return {
+              ...file,
+              outputName: renamed ? renamed.newName : file.outputName,
+            };
+          }
+        });
+        return { ...prev, files: updatedFiles };
+      });
+
+      setEditingName(false);
+      toast({
+        title: "File rinominati",
+        description: `I file sono stati rinominati con successo.`,
+      });
+    } catch (err: any) {
+      toast({
+        title: "Errore",
+        description: err.message || "Errore durante la rinomina",
+        variant: "destructive",
+      });
+    } finally {
+      setIsRenaming(false);
+    }
   };
 
   const handleDownload = () => {
@@ -221,6 +294,61 @@ export default function Converter() {
                   <Archive className="h-5 w-5 text-primary" />
                   Riepilogo File Generati
                 </h3>
+
+                {conversionResult.files.length === 1 && (
+                <div className="bg-muted/50 rounded-lg p-3 mb-3 flex items-center gap-2">
+                  <Pencil className="h-4 w-4 text-muted-foreground shrink-0" />
+                  {editingName ? (
+                    <div className="flex items-center gap-2 flex-1">
+                      <Input
+                        data-testid="input-rename"
+                        value={customName}
+                        onChange={(e) => setCustomName(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleRename()}
+                        className="h-8 text-sm"
+                        placeholder="Nome del file..."
+                        disabled={isRenaming}
+                      />
+                      <Button
+                        data-testid="button-confirm-rename"
+                        size="sm"
+                        onClick={handleRename}
+                        disabled={isRenaming || !customName.trim()}
+                        className="h-8 px-3 gap-1"
+                      >
+                        {isRenaming ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                        Applica
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditingName(false)}
+                        disabled={isRenaming}
+                        className="h-8 px-2"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 flex-1">
+                      <span className="text-sm text-muted-foreground">
+                        Nome file: <span className="font-medium text-foreground">{customName}</span>
+                      </span>
+                      <Button
+                        data-testid="button-edit-name"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setEditingName(true)}
+                        className="h-7 px-2 text-xs text-primary hover:text-primary/80"
+                      >
+                        <Pencil className="h-3 w-3 mr-1" />
+                        Rinomina
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                )}
+
                 <div className="bg-muted/50 rounded-lg p-4 space-y-3">
                   {conversionResult.files.map((file, index) => {
                     if (file.wasSplit && file.partsDetail) {

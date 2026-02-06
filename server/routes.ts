@@ -271,6 +271,66 @@ export async function registerRoutes(
     }
   });
 
+  app.post("/api/rename/:sessionId", (req, res) => {
+    const { sessionId } = req.params;
+    const { newBaseName } = req.body;
+    const sessionDir = path.join(OUTPUT_DIR, sessionId);
+    const convertedDir = path.join(sessionDir, "converted");
+
+    if (!newBaseName || typeof newBaseName !== "string" || newBaseName.trim().length === 0) {
+      return res.status(400).json({ message: "Nome non valido" });
+    }
+
+    if (!fs.existsSync(convertedDir)) {
+      return res.status(404).json({ message: "Sessione non trovata" });
+    }
+
+    const metaPath = path.join(sessionDir, "original_names.json");
+    if (fs.existsSync(metaPath)) {
+      try {
+        const names: string[] = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        if (names.length > 1) {
+          return res.status(400).json({ message: "La rinomina non è disponibile per sessioni con più file originali" });
+        }
+      } catch {}
+    }
+
+    const sanitized = newBaseName.trim().replace(/[<>:"/\\|?*]/g, "_");
+    const pdfFiles = fs.readdirSync(convertedDir).filter(f => f.endsWith(".pdf")).sort();
+
+    const renamedFiles: { oldName: string; newName: string; size: number }[] = [];
+
+    if (pdfFiles.length === 1) {
+      const oldPath = path.join(convertedDir, pdfFiles[0]);
+      const newName = `${sanitized}.pdf`;
+      const newPath = path.join(convertedDir, newName);
+      fs.renameSync(oldPath, newPath);
+      renamedFiles.push({ oldName: pdfFiles[0], newName, size: fs.statSync(newPath).size });
+    } else {
+      const tempNames: { oldPath: string; newName: string }[] = [];
+      for (let i = 0; i < pdfFiles.length; i++) {
+        const oldPath = path.join(convertedDir, pdfFiles[i]);
+        const newName = `${sanitized}_parte${i + 1}.pdf`;
+        tempNames.push({ oldPath, newName });
+      }
+      for (const { oldPath, newName } of tempNames) {
+        const tmpPath = oldPath + ".tmp_rename";
+        fs.renameSync(oldPath, tmpPath);
+      }
+      for (let i = 0; i < tempNames.length; i++) {
+        const tmpPath = tempNames[i].oldPath + ".tmp_rename";
+        const newPath = path.join(convertedDir, tempNames[i].newName);
+        fs.renameSync(tmpPath, newPath);
+        renamedFiles.push({ oldName: pdfFiles[i], newName: tempNames[i].newName, size: fs.statSync(newPath).size });
+      }
+    }
+
+    fs.writeFileSync(path.join(sessionDir, "original_names.json"), JSON.stringify([sanitized]));
+
+    log(`Renamed files in session ${sessionId}: ${renamedFiles.map(r => r.newName).join(", ")}`);
+    return res.json({ files: renamedFiles });
+  });
+
   app.get("/api/download/:sessionId", (req, res) => {
     const { sessionId } = req.params;
     const convertedDir = path.join(OUTPUT_DIR, sessionId, "converted");
