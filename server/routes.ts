@@ -32,9 +32,36 @@ const upload = multer({
   },
 });
 
-async function splitPdfWithQpdf(inputPath: string, baseName: string, sessionDir: string): Promise<string[]> {
-  const pageCountResult = await execFileAsync("qpdf", ["--show-npages", inputPath]);
-  const totalPages = parseInt(pageCountResult.stdout.trim(), 10);
+async function getPageCount(pdfPath: string): Promise<number> {
+  const result = await execFileAsync("qpdf", ["--show-npages", pdfPath]);
+  return parseInt(result.stdout.trim(), 10);
+}
+
+async function splitPdfByPages(inputPath: string, baseName: string, sessionDir: string, startPage: number, endPage: number, pagesPerPart: number, startIndex: number): Promise<string[]> {
+  const parts: string[] = [];
+  let currentStart = startPage;
+  let partIndex = startIndex;
+
+  while (currentStart <= endPage) {
+    const currentEnd = Math.min(currentStart + pagesPerPart - 1, endPage);
+    const partPath = path.join(sessionDir, `${baseName}_parte${partIndex}.pdf`);
+
+    await execFileAsync("qpdf", [
+      inputPath,
+      "--pages", inputPath, `${currentStart}-${currentEnd}`, "--",
+      partPath,
+    ]);
+
+    parts.push(partPath);
+    currentStart = currentEnd + 1;
+    partIndex++;
+  }
+
+  return parts;
+}
+
+async function splitPdfWithQpdf(inputPath: string, baseName: string, sessionDir: string, targetSize: number = MAX_SIZE_BYTES * 0.75): Promise<string[]> {
+  const totalPages = await getPageCount(inputPath);
 
   if (totalPages <= 1) {
     return [inputPath];
@@ -42,28 +69,9 @@ async function splitPdfWithQpdf(inputPath: string, baseName: string, sessionDir:
 
   const stat = fs.statSync(inputPath);
   const avgPageSize = stat.size / totalPages;
-  const pagesPerPart = Math.max(1, Math.floor(MAX_SIZE_BYTES / avgPageSize));
+  const pagesPerPart = Math.max(1, Math.floor(targetSize / avgPageSize));
 
-  const parts: string[] = [];
-  let startPage = 1;
-  let partIndex = 1;
-
-  while (startPage <= totalPages) {
-    const endPage = Math.min(startPage + pagesPerPart - 1, totalPages);
-    const partPath = path.join(sessionDir, `${baseName}_parte${partIndex}.pdf`);
-
-    await execFileAsync("qpdf", [
-      inputPath,
-      "--pages", inputPath, `${startPage}-${endPage}`, "--",
-      partPath,
-    ]);
-
-    parts.push(partPath);
-    startPage = endPage + 1;
-    partIndex++;
-  }
-
-  return parts;
+  return splitPdfByPages(inputPath, baseName, sessionDir, 1, totalPages, pagesPerPart, 1);
 }
 
 async function convertToPdfA(inputPath: string, outputPath: string): Promise<void> {
@@ -128,26 +136,20 @@ export async function registerRoutes(
         log(`Processing: ${originalName} (${(stat.size / 1024 / 1024).toFixed(2)} MB)`);
 
         let filesToConvert: { path: string; outputName: string }[] = [];
+        let needsSplit = stat.size > MAX_SIZE_BYTES;
 
-        if (stat.size > MAX_SIZE_BYTES) {
+        if (needsSplit) {
           log(`File > 9MB, splitting with QPDF...`);
           const parts = await splitPdfWithQpdf(file.path, baseName, splitDir);
-
           filesToConvert = parts.map((partPath, i) => ({
             path: partPath,
             outputName: `${baseName}_parte${i + 1}.pdf`,
           }));
-
-          results.push({
-            originalName,
-            outputName: baseName,
-            outputSize: 0,
-            wasSplit: true,
-            parts: parts.length,
-          });
         } else {
           filesToConvert = [{ path: file.path, outputName: originalName }];
         }
+
+        const finalOutputFiles: { name: string; size: number }[] = [];
 
         for (const item of filesToConvert) {
           const outputPath = path.join(convertedDir, item.outputName);
@@ -157,23 +159,53 @@ export async function registerRoutes(
             await convertToPdfA(item.path, outputPath);
             const outStat = fs.statSync(outputPath);
 
-            if (!filesToConvert[0].outputName.includes("_parte")) {
-              results.push({
-                originalName,
-                outputName: item.outputName,
-                outputSize: outStat.size,
-                wasSplit: false,
-              });
-            } else {
-              const parentResult = results.find(r => r.wasSplit && r.outputName === baseName);
-              if (parentResult) {
-                parentResult.outputSize += outStat.size;
+            if (outStat.size > MAX_SIZE_BYTES) {
+              log(`Output ${item.outputName} is ${(outStat.size / 1024 / 1024).toFixed(2)} MB (> 9MB), re-splitting...`);
+              fs.unlinkSync(outputPath);
+
+              const sourcePages = await getPageCount(item.path);
+              if (sourcePages <= 1) {
+                log(`Cannot split further (single page), keeping as-is`);
+                await convertToPdfA(item.path, outputPath);
+                const restat = fs.statSync(outputPath);
+                finalOutputFiles.push({ name: item.outputName, size: restat.size });
+                needsSplit = true;
+              } else {
+                const subParts = await splitPdfWithQpdf(item.path, path.parse(item.outputName).name, splitDir, MAX_SIZE_BYTES * 0.5);
+                needsSplit = true;
+
+                for (let si = 0; si < subParts.length; si++) {
+                  const subName = `${path.parse(item.outputName).name}_${si + 1}.pdf`;
+                  const subOutputPath = path.join(convertedDir, subName);
+                  await convertToPdfA(subParts[si], subOutputPath);
+                  const subStat = fs.statSync(subOutputPath);
+                  finalOutputFiles.push({ name: subName, size: subStat.size });
+                }
               }
+            } else {
+              finalOutputFiles.push({ name: item.outputName, size: outStat.size });
             }
           } catch (err: any) {
             log(`Error converting ${item.outputName}: ${err.message}`);
             throw new Error(`Errore nella conversione di ${item.outputName}: ${err.message}`);
           }
+        }
+
+        if (needsSplit || finalOutputFiles.length > 1) {
+          results.push({
+            originalName,
+            outputName: baseName,
+            outputSize: finalOutputFiles.reduce((acc, f) => acc + f.size, 0),
+            wasSplit: true,
+            parts: finalOutputFiles.length,
+          });
+        } else {
+          results.push({
+            originalName,
+            outputName: finalOutputFiles[0].name,
+            outputSize: finalOutputFiles[0].size,
+            wasSplit: false,
+          });
         }
 
         // Cleanup uploaded temp file
