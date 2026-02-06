@@ -138,7 +138,7 @@ export default function Converter() {
 
       toast({
         title: "Conversione Completata",
-        description: "Tutti i file sono stati convertiti in PDF/A e sono pronti per il download.",
+        description: "Tutti i file sono stati convertiti in formato PDF/A-1b e sono pronti per il download.",
       });
     } catch (err: any) {
       if (err.name === "AbortError") return;
@@ -199,10 +199,10 @@ export default function Converter() {
             <div className="h-10 w-10 rounded-lg bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20">
               <FileCheck className="h-6 w-6" />
             </div>
-            <h1 className="text-3xl font-bold tracking-tight">Convertitore PDF/A</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Convertitore PDF/A-1b</h1>
           </div>
           <p className="text-muted-foreground max-w-lg mx-auto md:mx-0 text-lg">
-            Conversione sicura e conforme. I file di grandi dimensioni vengono automaticamente divisi ed elaborati.
+            Converte i tuoi documenti in formato <strong>PDF/A-1b</strong> (ISO 19005-1), lo standard per l'archiviazione a lungo termine. I file di grandi dimensioni vengono automaticamente divisi.
           </p>
         </header>
 
@@ -347,7 +347,7 @@ export default function Converter() {
                   onClick={startConversion}
                   className="w-full md:w-auto gap-2 shadow-xl shadow-primary/20"
                 >
-                  <Play className="h-4 w-4" /> Converti in PDF/A
+                  <Play className="h-4 w-4" /> Converti in PDF/A-1b
                 </Button>
               )}
               {isCompleted ? (
