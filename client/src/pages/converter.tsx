@@ -11,6 +11,8 @@ import {
   X,
   FileCheck,
   Archive,
+  ShieldCheck,
+  ShieldX,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "@/hooks/use-toast";
@@ -25,12 +27,22 @@ interface FileItem {
   progress: number;
 }
 
+interface PartVerification {
+  name: string;
+  size: number;
+  verified: boolean;
+  conformance: string | null;
+}
+
 interface ConvertedFile {
   originalName: string;
   outputName: string;
   outputSize: number;
   wasSplit: boolean;
   parts?: number;
+  verified: boolean;
+  conformance: string | null;
+  partsDetail?: PartVerification[];
 }
 
 interface ConversionResult {
@@ -211,21 +223,24 @@ export default function Converter() {
                 </h3>
                 <div className="bg-muted/50 rounded-lg p-4 space-y-3">
                   {conversionResult.files.map((file, index) => {
-                    if (file.wasSplit && file.parts) {
+                    if (file.wasSplit && file.partsDetail) {
                       return (
                         <div key={index} className="space-y-2">
                           <div className="text-xs text-muted-foreground font-mono mb-1">
-                            {file.originalName} &rarr; diviso in {file.parts} parti
+                            {file.originalName} &rarr; diviso in {file.partsDetail.length} parti
                           </div>
-                          {Array.from({ length: file.parts }).map((_, i) => (
+                          {file.partsDetail.map((part, i) => (
                             <div key={`${index}-part-${i}`} className="flex justify-between items-center text-sm pl-4">
                               <span className="flex items-center gap-2">
                                 <FileCheck className="h-4 w-4 text-emerald-500" />
-                                {file.outputName}_parte{i + 1}.pdf
+                                {part.name}
                               </span>
-                              <span className="font-mono text-muted-foreground">
-                                {((file.outputSize / (file.parts || 1)) / 1024 / 1024).toFixed(2)} MB
-                              </span>
+                              <div className="flex items-center gap-3">
+                                <PdfaBadge verified={part.verified} conformance={part.conformance} />
+                                <span className="font-mono text-muted-foreground">
+                                  {(part.size / 1024 / 1024).toFixed(2)} MB
+                                </span>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -238,9 +253,12 @@ export default function Converter() {
                           <FileCheck className="h-4 w-4 text-emerald-500" />
                           {file.outputName}
                         </span>
-                        <span className="font-mono text-muted-foreground">
-                          {(file.outputSize / 1024 / 1024).toFixed(2)} MB
-                        </span>
+                        <div className="flex items-center gap-3">
+                          <PdfaBadge verified={file.verified} conformance={file.conformance} />
+                          <span className="font-mono text-muted-foreground">
+                            {(file.outputSize / 1024 / 1024).toFixed(2)} MB
+                          </span>
+                        </div>
                       </div>
                     );
                   })}
@@ -414,5 +432,23 @@ function FileRow({
         </div>
       </div>
     </motion.div>
+  );
+}
+
+function PdfaBadge({ verified, conformance }: { verified: boolean; conformance: string | null }) {
+  if (verified) {
+    return (
+      <span data-testid="badge-pdfa-verified" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+        <ShieldCheck className="h-3.5 w-3.5" />
+        {conformance || "PDF/A"} verificato
+      </span>
+    );
+  }
+
+  return (
+    <span data-testid="badge-pdfa-failed" className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+      <ShieldX className="h-3.5 w-3.5" />
+      Non conforme
+    </span>
   );
 }

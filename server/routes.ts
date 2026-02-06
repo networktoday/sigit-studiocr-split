@@ -112,10 +112,37 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
   await execFileAsync("gs", args);
 }
 
+async function verifyPdfA(filePath: string): Promise<{ valid: boolean; conformance: string | null }> {
+  try {
+    const buffer = fs.readFileSync(filePath);
+    const content = buffer.toString("latin1");
+
+    const partMatch = content.match(/pdfaid:part[>"'\s=]*(\d+)/i);
+    const confMatch = content.match(/pdfaid:conformance[>"'\s=]*([A-Za-z]+)/i);
+
+    if (partMatch) {
+      const part = partMatch[1];
+      const conformance = confMatch ? confMatch[1].toUpperCase() : "B";
+      return { valid: true, conformance: `PDF/A-${part}${conformance.toLowerCase()}` };
+    }
+
+    return { valid: false, conformance: null };
+  } catch {
+    return { valid: false, conformance: null };
+  }
+}
+
 function cleanupDir(dir: string) {
   if (fs.existsSync(dir)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+interface PartVerification {
+  name: string;
+  size: number;
+  verified: boolean;
+  conformance: string | null;
 }
 
 interface ConvertedFile {
@@ -124,6 +151,9 @@ interface ConvertedFile {
   outputSize: number;
   wasSplit: boolean;
   parts?: number;
+  verified: boolean;
+  conformance: string | null;
+  partsDetail?: PartVerification[];
 }
 
 export async function registerRoutes(
@@ -174,7 +204,7 @@ export async function registerRoutes(
           log(`Output > 9MB, splitting converted PDF/A with QPDF...`);
           const parts = await splitToFitSize(tempConvertedPath, convertedDir, baseName, MAX_SIZE_BYTES);
 
-          const finalParts: { name: string; size: number }[] = [];
+          const partsDetail: PartVerification[] = [];
           for (let i = 0; i < parts.length; i++) {
             const finalName = `${baseName}_parte${i + 1}.pdf`;
             const finalPath = path.join(convertedDir, finalName);
@@ -182,28 +212,38 @@ export async function registerRoutes(
               fs.renameSync(parts[i], finalPath);
             }
             const partSize = fs.statSync(finalPath).size;
-            finalParts.push({ name: finalName, size: partSize });
-            log(`  Part ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB)`);
+            const verification = await verifyPdfA(finalPath);
+            partsDetail.push({ name: finalName, size: partSize, verified: verification.valid, conformance: verification.conformance });
+            log(`  Part ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB) - ${verification.valid ? verification.conformance : "NON CONFORME"}`);
           }
 
           fs.unlinkSync(tempConvertedPath);
 
+          const allVerified = partsDetail.every(p => p.verified);
           results.push({
             originalName,
             outputName: baseName,
-            outputSize: finalParts.reduce((acc, f) => acc + f.size, 0),
+            outputSize: partsDetail.reduce((acc, f) => acc + f.size, 0),
             wasSplit: true,
-            parts: finalParts.length,
+            parts: partsDetail.length,
+            verified: allVerified,
+            conformance: allVerified ? partsDetail[0].conformance : null,
+            partsDetail,
           });
         } else {
           const finalPath = path.join(convertedDir, originalName);
           fs.renameSync(tempConvertedPath, finalPath);
+
+          const verification = await verifyPdfA(finalPath);
+          log(`Verification: ${verification.valid ? verification.conformance : "NON CONFORME"}`);
 
           results.push({
             originalName,
             outputName: originalName,
             outputSize: convertedSize,
             wasSplit: false,
+            verified: verification.valid,
+            conformance: verification.conformance,
           });
         }
 
