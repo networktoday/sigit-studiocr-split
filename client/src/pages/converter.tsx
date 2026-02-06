@@ -171,6 +171,59 @@ export default function Converter() {
                </CardContent>
             </Card>
 
+            {/* Summary Area */}
+            {isCompleted && (
+               <motion.div 
+                 initial={{ opacity: 0, height: 0 }}
+                 animate={{ opacity: 1, height: "auto" }}
+                 className="pt-6 border-t"
+               >
+                 <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                   <Archive className="h-5 w-5 text-primary" />
+                   Riepilogo File Generati
+                 </h3>
+                 <div className="bg-muted/50 rounded-lg p-4 space-y-3">
+                   {files.map((file) => {
+                     // Calculate mock output size (slightly larger for PDF/A)
+                     const outputSize = file.size * 1.15;
+                     
+                     if (file.splitParts && file.splitParts > 1) {
+                       return Array.from({ length: file.splitParts }).map((_, i) => (
+                         <div key={`${file.id}-part-${i}`} className="flex justify-between items-center text-sm">
+                           <span className="flex items-center gap-2">
+                             <FileCheck className="h-4 w-4 text-emerald-500" />
+                             {file.name.replace('.pdf', '')}_parte{i+1}.pdf
+                           </span>
+                           <span className="font-mono text-muted-foreground">
+                             {((outputSize / file.splitParts) / 1024 / 1024).toFixed(2)} MB
+                           </span>
+                         </div>
+                       ));
+                     }
+                     
+                     return (
+                       <div key={file.id} className="flex justify-between items-center text-sm">
+                         <span className="flex items-center gap-2">
+                           <FileCheck className="h-4 w-4 text-emerald-500" />
+                           {file.name}
+                         </span>
+                         <span className="font-mono text-muted-foreground">
+                           {(outputSize / 1024 / 1024).toFixed(2)} MB
+                         </span>
+                       </div>
+                     );
+                   })}
+                   
+                   <div className="pt-3 mt-3 border-t border-dashed flex justify-between items-center font-medium">
+                     <span>Totale Archivio ZIP</span>
+                     <span>
+                       {(files.reduce((acc, file) => acc + (file.size * 1.15), 0) / 1024 / 1024).toFixed(2)} MB
+                     </span>
+                   </div>
+                 </div>
+               </motion.div>
+            )}
+
             {/* Action Area */}
             <div className="flex justify-end pt-4">
                {isCompleted ? (
