@@ -192,12 +192,37 @@ export async function registerRoutes(
         }
 
         if (needsSplit || finalOutputFiles.length > 1) {
+          const renamedFiles: { name: string; size: number }[] = [];
+          for (let ri = 0; ri < finalOutputFiles.length; ri++) {
+            const newName = `${baseName}_parte${ri + 1}.pdf`;
+            const oldPath = path.join(convertedDir, finalOutputFiles[ri].name);
+            const newPath = path.join(convertedDir, newName);
+            if (oldPath !== newPath) {
+              if (fs.existsSync(newPath)) {
+                const tmpPath = newPath + ".tmp_rename";
+                fs.renameSync(oldPath, tmpPath);
+                renamedFiles.push({ name: newName, size: finalOutputFiles[ri].size, });
+              } else {
+                fs.renameSync(oldPath, newPath);
+                renamedFiles.push({ name: newName, size: finalOutputFiles[ri].size });
+              }
+            } else {
+              renamedFiles.push({ name: newName, size: finalOutputFiles[ri].size });
+            }
+          }
+          for (const rf of renamedFiles) {
+            const tmpPath = path.join(convertedDir, rf.name + ".tmp_rename");
+            if (fs.existsSync(tmpPath)) {
+              fs.renameSync(tmpPath, path.join(convertedDir, rf.name));
+            }
+          }
+
           results.push({
             originalName,
             outputName: baseName,
-            outputSize: finalOutputFiles.reduce((acc, f) => acc + f.size, 0),
+            outputSize: renamedFiles.reduce((acc, f) => acc + f.size, 0),
             wasSplit: true,
-            parts: finalOutputFiles.length,
+            parts: renamedFiles.length,
           });
         } else {
           results.push({
