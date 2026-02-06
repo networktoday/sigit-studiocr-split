@@ -100,10 +100,20 @@ export default function Converter() {
     setFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
-  const clearAll = () => {
-    setFiles([]);
-    setIsCompleted(false);
-    setIsProcessing(false);
+  const handleDownload = () => {
+    toast({
+      title: "Download avviato",
+      description: "Il tuo archivio ZIP è in fase di scaricamento.",
+    });
+    
+    // Simulate download
+    const element = document.createElement("a");
+    element.setAttribute("href", "data:text/plain;charset=utf-8,This is a mock ZIP file for the prototype");
+    element.setAttribute("download", "files_convertiti.zip");
+    element.style.display = "none";
+    document.body.appendChild(element);
+    element.click();
+    document.body.removeChild(element);
   };
 
   return (
@@ -158,7 +168,11 @@ export default function Converter() {
             {/* Action Area */}
             <div className="flex justify-end pt-4">
                {isCompleted ? (
-                 <Button size="lg" className="w-full md:w-auto gap-2 shadow-xl shadow-primary/20 animate-in fade-in zoom-in duration-300">
+                 <Button 
+                   size="lg" 
+                   onClick={handleDownload}
+                   className="w-full md:w-auto gap-2 shadow-xl shadow-primary/20 animate-in fade-in zoom-in duration-300"
+                 >
                     <Download className="h-4 w-4" /> Scarica tutto (ZIP)
                  </Button>
                ) : (
