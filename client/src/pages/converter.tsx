@@ -202,7 +202,7 @@ export default function Converter() {
             <h1 className="text-3xl font-bold tracking-tight">Convertitore PDF/A-1b</h1>
           </div>
           <p className="text-muted-foreground max-w-lg mx-auto md:mx-0 text-lg">
-            Converte i tuoi documenti in formato <strong>PDF/A-1b</strong> (ISO 19005-1)<br />lo standard per l'archiviazione a lungo termine. I file di grandi dimensioni vengono automaticamente divisi.
+            Conversione documenti in formato <strong>PDF/A-1b</strong> (ISO 19005-1)<br />lo standard per l'archiviazione a lungo termine. I file di grandi dimensioni vengono automaticamente divisi.
           </p>
         </header>
 
