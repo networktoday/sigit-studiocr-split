@@ -37,85 +37,81 @@ async function getPageCount(pdfPath: string): Promise<number> {
   return parseInt(result.stdout.trim(), 10);
 }
 
-async function splitToFitSize(inputPath: string, outputDir: string, baseName: string, maxSize: number): Promise<string[]> {
-  const totalPages = await getPageCount(inputPath);
-  const fileSize = fs.statSync(inputPath).size;
+import { fileURLToPath } from "url";
+const __filename_local = fileURLToPath(import.meta.url);
+const __dirname_local = path.dirname(__filename_local);
+async function findPageRangesForSize(convertedPdfPath: string, maxSize: number): Promise<{ start: number; end: number }[]> {
+  const totalPages = await getPageCount(convertedPdfPath);
+  const fileSize = fs.statSync(convertedPdfPath).size;
 
-  if (totalPages <= 1 || fileSize <= maxSize) {
-    return [inputPath];
+  if (totalPages <= 1) {
+    return [{ start: 1, end: 1 }];
   }
 
+  const tmpDir = path.dirname(convertedPdfPath);
   let tmpCounter = 0;
 
-  async function tryExtract(start: number, end: number): Promise<{ path: string; size: number }> {
+  async function tryExtractSize(start: number, end: number): Promise<number> {
     tmpCounter++;
-    const tmpPath = path.join(outputDir, `${baseName}__tmp_${tmpCounter}.pdf`);
+    const tmpPath = path.join(tmpDir, `__size_probe_${tmpCounter}.pdf`);
     await execFileAsync("qpdf", [
-      inputPath,
-      "--pages", inputPath, `${start}-${end}`, "--",
+      convertedPdfPath,
+      "--pages", convertedPdfPath, `${start}-${end}`, "--",
       tmpPath,
     ]);
     const size = fs.statSync(tmpPath).size;
-    return { path: tmpPath, size };
+    fs.unlinkSync(tmpPath);
+    return size;
   }
 
-  async function findMaxPages(start: number, maxEnd: number): Promise<{ endPage: number; filePath: string }> {
-    let result = await tryExtract(start, maxEnd);
-    if (result.size <= maxSize) {
-      return { endPage: maxEnd, filePath: result.path };
-    }
-    fs.unlinkSync(result.path);
+  const ranges: { start: number; end: number }[] = [];
+  let currentPage = 1;
 
-    if (start === maxEnd) {
-      log(`  Warning: single page ${start} is ${(result.size / 1024 / 1024).toFixed(2)} MB (exceeds limit), keeping as-is`);
-      const single = await tryExtract(start, start);
-      return { endPage: start, filePath: single.path };
+  while (currentPage <= totalPages) {
+    let size = await tryExtractSize(currentPage, totalPages);
+    if (size <= maxSize) {
+      ranges.push({ start: currentPage, end: totalPages });
+      break;
     }
 
-    let lo = start;
-    let hi = maxEnd - 1;
-    let bestEnd = start;
-    let bestPath = "";
+    let lo = currentPage;
+    let hi = totalPages - 1;
+    let bestEnd = currentPage;
 
     while (lo <= hi) {
       const mid = Math.floor((lo + hi) / 2);
-      result = await tryExtract(start, mid);
-
-      if (result.size <= maxSize) {
-        if (bestPath) {
-          try { fs.unlinkSync(bestPath); } catch {}
-        }
+      size = await tryExtractSize(currentPage, mid);
+      if (size <= maxSize) {
         bestEnd = mid;
-        bestPath = result.path;
         lo = mid + 1;
       } else {
-        fs.unlinkSync(result.path);
         hi = mid - 1;
       }
     }
 
-    if (!bestPath) {
-      const single = await tryExtract(start, start);
-      return { endPage: start, filePath: single.path };
-    }
-
-    return { endPage: bestEnd, filePath: bestPath };
+    ranges.push({ start: currentPage, end: bestEnd });
+    currentPage = bestEnd + 1;
   }
 
-  const parts: string[] = [];
-  let currentPage = 1;
-
-  while (currentPage <= totalPages) {
-    const { endPage, filePath } = await findMaxPages(currentPage, totalPages);
-    parts.push(filePath);
-    log(`  Split: pages ${currentPage}-${endPage} (${(fs.statSync(filePath).size / 1024 / 1024).toFixed(2)} MB)`);
-    currentPage = endPage + 1;
-  }
-
-  return parts;
+  return ranges;
 }
 
+const ICC_PROFILE_PATH = path.resolve(__dirname_local, "srgb.icc");
+const PDFA_DEF_TEMPLATE = path.resolve(__dirname_local, "PDFA_def.ps");
+
 async function convertToPdfA(inputPath: string, outputPath: string): Promise<void> {
+  const iccPath = fs.existsSync(ICC_PROFILE_PATH)
+    ? ICC_PROFILE_PATH
+    : path.resolve("server/srgb.icc");
+
+  const templatePath = fs.existsSync(PDFA_DEF_TEMPLATE)
+    ? PDFA_DEF_TEMPLATE
+    : path.resolve("server/PDFA_def.ps");
+
+  const tmpDefPath = outputPath + ".pdfa_def.ps";
+  const templateContent = fs.readFileSync(templatePath, "utf-8");
+  fs.writeFileSync(tmpDefPath, templateContent.replace("__SRGB_ICC_PATH__", iccPath));
+
   const args = [
     "-dPDFA=1",
     "-dBATCH",
@@ -124,11 +120,18 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
     "-sColorConversionStrategy=UseDeviceIndependentColor",
     "-sDEVICE=pdfwrite",
     "-dPDFACompatibilityPolicy=1",
+    `-dPDFSETTINGS=/prepress`,
+    `--permit-file-read=${iccPath}`,
     `-sOutputFile=${outputPath}`,
+    tmpDefPath,
     inputPath,
   ];
 
-  await execFileAsync("gs", args);
+  try {
+    await execFileAsync("gs", args);
+  } finally {
+    try { fs.unlinkSync(tmpDefPath); } catch {}
+  }
 }
 
 async function verifyPdfA(filePath: string): Promise<{ valid: boolean; conformance: string | null }> {
@@ -226,23 +229,33 @@ export async function registerRoutes(
         log(`Converted size: ${(convertedSize / 1024 / 1024).toFixed(2)} MB`);
 
         if (convertedSize > MAX_SIZE_BYTES) {
-          log(`Output > 9MB, splitting converted PDF/A with QPDF...`);
-          const parts = await splitToFitSize(tempConvertedPath, convertedDir, outputBaseName, MAX_SIZE_BYTES);
+          log(`Output > 9MB, splitting original PDF and converting each part separately...`);
+
+          const pageRanges = await findPageRangesForSize(tempConvertedPath, MAX_SIZE_BYTES);
+          fs.unlinkSync(tempConvertedPath);
 
           const partsDetail: PartVerification[] = [];
-          for (let i = 0; i < parts.length; i++) {
+          for (let i = 0; i < pageRanges.length; i++) {
+            const { start, end } = pageRanges[i];
+            const partOrigPath = path.join(splitDir, `${originalBaseName}_orig_part${i + 1}.pdf`);
+            await execFileAsync("qpdf", [
+              file.path,
+              "--pages", file.path, `${start}-${end}`, "--",
+              partOrigPath,
+            ]);
+
             const finalName = `${outputBaseName}_parte${i + 1}.pdf`;
             const finalPath = path.join(convertedDir, finalName);
-            if (parts[i] !== finalPath) {
-              fs.renameSync(parts[i], finalPath);
-            }
+
+            log(`  Converting part ${i + 1} (pages ${start}-${end}) to PDF/A...`);
+            await convertToPdfA(partOrigPath, finalPath);
+            try { fs.unlinkSync(partOrigPath); } catch {}
+
             const partSize = fs.statSync(finalPath).size;
             const verification = await verifyPdfA(finalPath);
             partsDetail.push({ name: finalName, size: partSize, verified: verification.valid, conformance: verification.conformance });
             log(`  Part ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB) - ${verification.valid ? verification.conformance : "NON CONFORME"}`);
           }
-
-          fs.unlinkSync(tempConvertedPath);
 
           const allVerified = partsDetail.every(p => p.verified);
           results.push({
