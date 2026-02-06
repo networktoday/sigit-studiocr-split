@@ -41,8 +41,8 @@ export default function Converter() {
         setIsProcessing(false);
         setIsCompleted(true);
         toast({
-          title: "Conversion Complete",
-          description: "All files have been converted to PDF/A and are ready for download.",
+          title: "Conversione Completata",
+          description: "Tutti i file sono stati convertiti in PDF/A e sono pronti per il download.",
         });
       }
       return;
@@ -116,10 +116,10 @@ export default function Converter() {
              <div className="h-10 w-10 rounded-lg bg-primary flex items-center justify-center text-primary-foreground shadow-lg shadow-primary/20">
                <FileCheck className="h-6 w-6" />
              </div>
-             <h1 className="text-3xl font-bold tracking-tight">PDF/A Converter</h1>
+             <h1 className="text-3xl font-bold tracking-tight">Convertitore PDF/A</h1>
           </div>
           <p className="text-muted-foreground max-w-lg mx-auto md:mx-0 text-lg">
-            Secure, compliant conversion. Large files are automatically split and processed.
+            Conversione sicura e conforme. I file di grandi dimensioni vengono automaticamente divisi ed elaborati.
           </p>
         </header>
 
@@ -138,10 +138,10 @@ export default function Converter() {
             <Card className="border-none shadow-xl shadow-black/5 overflow-hidden">
                <CardContent className="p-0">
                   <div className="bg-muted/30 p-4 border-b flex justify-between items-center">
-                    <span className="font-medium font-mono text-sm text-muted-foreground">SESSION: {new Date().toLocaleDateString()}</span>
+                    <span className="font-medium font-mono text-sm text-muted-foreground">SESSIONE: {new Date().toLocaleDateString()}</span>
                     {isCompleted && (
                         <Button variant="ghost" size="sm" onClick={clearAll} className="h-8 text-xs hover:bg-destructive/10 hover:text-destructive transition-colors">
-                          Start Over
+                          Ricomincia
                         </Button>
                     )}
                   </div>
@@ -159,13 +159,13 @@ export default function Converter() {
             <div className="flex justify-end pt-4">
                {isCompleted ? (
                  <Button size="lg" className="w-full md:w-auto gap-2 shadow-xl shadow-primary/20 animate-in fade-in zoom-in duration-300">
-                    <Download className="h-4 w-4" /> Download All (ZIP)
+                    <Download className="h-4 w-4" /> Scarica tutto (ZIP)
                  </Button>
                ) : (
                  isProcessing && (
                    <div className="flex items-center gap-2 text-sm text-muted-foreground animate-pulse">
                      <Loader2 className="h-4 w-4 animate-spin" />
-                     Processing files... do not close this tab.
+                     Elaborazione file in corso... non chiudere questa scheda.
                    </div>
                  )
                )}
@@ -218,10 +218,10 @@ function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
           </div>
           <div className="space-y-1">
             <h3 className="text-xl font-semibold">
-              {isDragActive ? "Drop the files here..." : "Drop PDF files here"}
+              {isDragActive ? "Rilascia i file qui..." : "Trascina qui i file PDF"}
             </h3>
             <p className="text-sm text-muted-foreground">
-              or click to browse. Max 50MB per file.
+              o clicca per sfogliare. Max 50MB per file.
             </p>
           </div>
           <div className="flex gap-2 text-xs font-mono text-muted-foreground/60 mt-4">
@@ -239,12 +239,12 @@ function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
 function FileRow({ file, onRemove, isLocked }: { file: FileItem; onRemove: (id: string) => void; isLocked: boolean }) {
   const getStatusText = (file: FileItem) => {
     switch (file.status) {
-      case "uploading": return "Uploading...";
-      case "splitting": return `File > 9MB. Splitting...`;
-      case "converting": return file.splitParts ? `Converting ${file.splitParts} parts to PDF/A...` : "Converting to PDF/A...";
-      case "compressing": return "Compressing into ZIP...";
-      case "done": return "Ready";
-      default: return "Waiting";
+      case "uploading": return "Caricamento...";
+      case "splitting": return `File > 9MB. Divisione in corso...`;
+      case "converting": return file.splitParts ? `Conversione di ${file.splitParts} parti in PDF/A...` : "Conversione in PDF/A...";
+      case "compressing": return "Compressione in ZIP...";
+      case "done": return "Pronto";
+      default: return "In attesa";
     }
   };
 
