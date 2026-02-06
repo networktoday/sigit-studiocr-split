@@ -37,41 +37,63 @@ async function getPageCount(pdfPath: string): Promise<number> {
   return parseInt(result.stdout.trim(), 10);
 }
 
-async function splitPdfByPages(inputPath: string, baseName: string, sessionDir: string, startPage: number, endPage: number, pagesPerPart: number, startIndex: number): Promise<string[]> {
-  const parts: string[] = [];
-  let currentStart = startPage;
-  let partIndex = startIndex;
-
-  while (currentStart <= endPage) {
-    const currentEnd = Math.min(currentStart + pagesPerPart - 1, endPage);
-    const partPath = path.join(sessionDir, `${baseName}_parte${partIndex}.pdf`);
-
-    await execFileAsync("qpdf", [
-      inputPath,
-      "--pages", inputPath, `${currentStart}-${currentEnd}`, "--",
-      partPath,
-    ]);
-
-    parts.push(partPath);
-    currentStart = currentEnd + 1;
-    partIndex++;
-  }
-
-  return parts;
-}
-
-async function splitPdfWithQpdf(inputPath: string, baseName: string, sessionDir: string, targetSize: number = MAX_SIZE_BYTES * 0.75): Promise<string[]> {
+async function splitToFitSize(inputPath: string, outputDir: string, baseName: string, maxSize: number): Promise<string[]> {
   const totalPages = await getPageCount(inputPath);
+  const fileSize = fs.statSync(inputPath).size;
 
-  if (totalPages <= 1) {
+  if (totalPages <= 1 || fileSize <= maxSize) {
     return [inputPath];
   }
 
-  const stat = fs.statSync(inputPath);
-  const avgPageSize = stat.size / totalPages;
-  const pagesPerPart = Math.max(1, Math.floor(targetSize / avgPageSize));
+  const avgPageSize = fileSize / totalPages;
+  const pagesPerPart = Math.max(1, Math.floor(maxSize / avgPageSize));
 
-  return splitPdfByPages(inputPath, baseName, sessionDir, 1, totalPages, pagesPerPart, 1);
+  const parts: string[] = [];
+  let startPage = 1;
+  let partIndex = 1;
+
+  while (startPage <= totalPages) {
+    const endPage = Math.min(startPage + pagesPerPart - 1, totalPages);
+    const partPath = path.join(outputDir, `${baseName}__tmp_part${partIndex}.pdf`);
+
+    await execFileAsync("qpdf", [
+      inputPath,
+      "--pages", inputPath, `${startPage}-${endPage}`, "--",
+      partPath,
+    ]);
+
+    const partSize = fs.statSync(partPath).size;
+    if (partSize > maxSize && endPage > startPage) {
+      fs.unlinkSync(partPath);
+      const halfPages = Math.max(1, Math.floor((endPage - startPage + 1) / 2));
+      const firstHalfEnd = startPage + halfPages - 1;
+
+      const firstPath = path.join(outputDir, `${baseName}__tmp_part${partIndex}.pdf`);
+      await execFileAsync("qpdf", [
+        inputPath,
+        "--pages", inputPath, `${startPage}-${firstHalfEnd}`, "--",
+        firstPath,
+      ]);
+      parts.push(firstPath);
+      partIndex++;
+
+      const secondPath = path.join(outputDir, `${baseName}__tmp_part${partIndex}.pdf`);
+      await execFileAsync("qpdf", [
+        inputPath,
+        "--pages", inputPath, `${firstHalfEnd + 1}-${endPage}`, "--",
+        secondPath,
+      ]);
+      parts.push(secondPath);
+      partIndex++;
+    } else {
+      parts.push(partPath);
+      partIndex++;
+    }
+
+    startPage = endPage + 1;
+  }
+
+  return parts;
 }
 
 async function convertToPdfA(inputPath: string, outputPath: string): Promise<void> {
@@ -135,105 +157,56 @@ export async function registerRoutes(
 
         log(`Processing: ${originalName} (${(stat.size / 1024 / 1024).toFixed(2)} MB)`);
 
-        let filesToConvert: { path: string; outputName: string }[] = [];
-        let needsSplit = stat.size > MAX_SIZE_BYTES;
+        const tempConvertedPath = path.join(splitDir, `${baseName}_pdfa_full.pdf`);
 
-        if (needsSplit) {
-          log(`File > 9MB, splitting with QPDF...`);
-          const parts = await splitPdfWithQpdf(file.path, baseName, splitDir);
-          filesToConvert = parts.map((partPath, i) => ({
-            path: partPath,
-            outputName: `${baseName}_parte${i + 1}.pdf`,
-          }));
-        } else {
-          filesToConvert = [{ path: file.path, outputName: originalName }];
+        try {
+          log(`Converting to PDF/A: ${originalName}`);
+          await convertToPdfA(file.path, tempConvertedPath);
+        } catch (err: any) {
+          log(`Error converting ${originalName}: ${err.message}`);
+          throw new Error(`Errore nella conversione di ${originalName}: ${err.message}`);
         }
 
-        const finalOutputFiles: { name: string; size: number }[] = [];
+        const convertedSize = fs.statSync(tempConvertedPath).size;
+        log(`Converted size: ${(convertedSize / 1024 / 1024).toFixed(2)} MB`);
 
-        for (const item of filesToConvert) {
-          const outputPath = path.join(convertedDir, item.outputName);
-          log(`Converting to PDF/A: ${item.outputName}`);
+        if (convertedSize > MAX_SIZE_BYTES) {
+          log(`Output > 9MB, splitting converted PDF/A with QPDF...`);
+          const parts = await splitToFitSize(tempConvertedPath, convertedDir, baseName, MAX_SIZE_BYTES);
 
-          try {
-            await convertToPdfA(item.path, outputPath);
-            const outStat = fs.statSync(outputPath);
-
-            if (outStat.size > MAX_SIZE_BYTES) {
-              log(`Output ${item.outputName} is ${(outStat.size / 1024 / 1024).toFixed(2)} MB (> 9MB), re-splitting...`);
-              fs.unlinkSync(outputPath);
-
-              const sourcePages = await getPageCount(item.path);
-              if (sourcePages <= 1) {
-                log(`Cannot split further (single page), keeping as-is`);
-                await convertToPdfA(item.path, outputPath);
-                const restat = fs.statSync(outputPath);
-                finalOutputFiles.push({ name: item.outputName, size: restat.size });
-                needsSplit = true;
-              } else {
-                const subParts = await splitPdfWithQpdf(item.path, path.parse(item.outputName).name, splitDir, MAX_SIZE_BYTES * 0.5);
-                needsSplit = true;
-
-                for (let si = 0; si < subParts.length; si++) {
-                  const subName = `${path.parse(item.outputName).name}_${si + 1}.pdf`;
-                  const subOutputPath = path.join(convertedDir, subName);
-                  await convertToPdfA(subParts[si], subOutputPath);
-                  const subStat = fs.statSync(subOutputPath);
-                  finalOutputFiles.push({ name: subName, size: subStat.size });
-                }
-              }
-            } else {
-              finalOutputFiles.push({ name: item.outputName, size: outStat.size });
+          const finalParts: { name: string; size: number }[] = [];
+          for (let i = 0; i < parts.length; i++) {
+            const finalName = `${baseName}_parte${i + 1}.pdf`;
+            const finalPath = path.join(convertedDir, finalName);
+            if (parts[i] !== finalPath) {
+              fs.renameSync(parts[i], finalPath);
             }
-          } catch (err: any) {
-            log(`Error converting ${item.outputName}: ${err.message}`);
-            throw new Error(`Errore nella conversione di ${item.outputName}: ${err.message}`);
+            const partSize = fs.statSync(finalPath).size;
+            finalParts.push({ name: finalName, size: partSize });
+            log(`  Part ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB)`);
           }
-        }
 
-        if (needsSplit || finalOutputFiles.length > 1) {
-          const renamedFiles: { name: string; size: number }[] = [];
-          for (let ri = 0; ri < finalOutputFiles.length; ri++) {
-            const newName = `${baseName}_parte${ri + 1}.pdf`;
-            const oldPath = path.join(convertedDir, finalOutputFiles[ri].name);
-            const newPath = path.join(convertedDir, newName);
-            if (oldPath !== newPath) {
-              if (fs.existsSync(newPath)) {
-                const tmpPath = newPath + ".tmp_rename";
-                fs.renameSync(oldPath, tmpPath);
-                renamedFiles.push({ name: newName, size: finalOutputFiles[ri].size, });
-              } else {
-                fs.renameSync(oldPath, newPath);
-                renamedFiles.push({ name: newName, size: finalOutputFiles[ri].size });
-              }
-            } else {
-              renamedFiles.push({ name: newName, size: finalOutputFiles[ri].size });
-            }
-          }
-          for (const rf of renamedFiles) {
-            const tmpPath = path.join(convertedDir, rf.name + ".tmp_rename");
-            if (fs.existsSync(tmpPath)) {
-              fs.renameSync(tmpPath, path.join(convertedDir, rf.name));
-            }
-          }
+          fs.unlinkSync(tempConvertedPath);
 
           results.push({
             originalName,
             outputName: baseName,
-            outputSize: renamedFiles.reduce((acc, f) => acc + f.size, 0),
+            outputSize: finalParts.reduce((acc, f) => acc + f.size, 0),
             wasSplit: true,
-            parts: renamedFiles.length,
+            parts: finalParts.length,
           });
         } else {
+          const finalPath = path.join(convertedDir, originalName);
+          fs.renameSync(tempConvertedPath, finalPath);
+
           results.push({
             originalName,
-            outputName: finalOutputFiles[0].name,
-            outputSize: finalOutputFiles[0].size,
+            outputName: originalName,
+            outputSize: convertedSize,
             wasSplit: false,
           });
         }
 
-        // Cleanup uploaded temp file
         try { fs.unlinkSync(file.path); } catch {}
       }
 
