@@ -180,6 +180,12 @@ export async function registerRoutes(
         try { fs.unlinkSync(file.path); } catch {}
       }
 
+      const originalNames = files.map(f => {
+        const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
+        return path.parse(name).name;
+      });
+      fs.writeFileSync(path.join(sessionDir, "original_names.json"), JSON.stringify(originalNames));
+
       return res.json({
         sessionId,
         files: results,
@@ -209,8 +215,21 @@ export async function registerRoutes(
       return res.status(404).json({ message: "Nessun file convertito trovato" });
     }
 
+    let zipFileName = "file_convertiti_pdfa.zip";
+    const metaPath = path.join(OUTPUT_DIR, sessionId, "original_names.json");
+    if (fs.existsSync(metaPath)) {
+      try {
+        const names: string[] = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+        if (names.length === 1) {
+          zipFileName = `${names[0]}_convertito_pdfa.zip`;
+        } else {
+          zipFileName = `${names.join("_")}_convertito_pdfa.zip`;
+        }
+      } catch {}
+    }
+
     res.setHeader("Content-Type", "application/zip");
-    res.setHeader("Content-Disposition", "attachment; filename=file_convertiti_pdfa.zip");
+    res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(zipFileName)}"`);
 
     const archive = archiver("zip", { zlib: { level: 9 } });
 
