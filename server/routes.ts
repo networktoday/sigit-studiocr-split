@@ -71,7 +71,7 @@ async function findPageRangesForSize(convertedPdfPath: string, maxSize: number):
   const tmpDir = path.dirname(convertedPdfPath);
   let tmpCounter = 0;
 
-  async function tryExtractSize(start: number, end: number): Promise<number> {
+  async function extractSize(start: number, end: number): Promise<number> {
     tmpCounter++;
     const tmpPath = path.join(tmpDir, `__size_probe_${tmpCounter}.pdf`);
     await execFileAsync("qpdf", [
@@ -84,33 +84,46 @@ async function findPageRangesForSize(convertedPdfPath: string, maxSize: number):
     return size;
   }
 
+  const avgPageSize = fileSize / totalPages;
+  const estimatedPagesPerChunk = Math.max(1, Math.floor((maxSize * 0.85) / avgPageSize));
+
   const ranges: { start: number; end: number }[] = [];
   let currentPage = 1;
 
   while (currentPage <= totalPages) {
-    let size = await tryExtractSize(currentPage, totalPages);
-    if (size <= maxSize) {
-      ranges.push({ start: currentPage, end: totalPages });
-      break;
-    }
-
-    let lo = currentPage;
-    let hi = totalPages - 1;
-    let bestEnd = currentPage;
-
-    while (lo <= hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      size = await tryExtractSize(currentPage, mid);
+    if (currentPage + estimatedPagesPerChunk - 1 >= totalPages) {
+      const size = await extractSize(currentPage, totalPages);
       if (size <= maxSize) {
-        bestEnd = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
+        ranges.push({ start: currentPage, end: totalPages });
+        break;
       }
     }
 
-    ranges.push({ start: currentPage, end: bestEnd });
-    currentPage = bestEnd + 1;
+    let candidateEnd = Math.min(currentPage + estimatedPagesPerChunk - 1, totalPages);
+    let size = await extractSize(currentPage, candidateEnd);
+
+    if (size <= maxSize) {
+      let probes = 0;
+      while (candidateEnd + 1 <= totalPages && probes < 10) {
+        const nextSize = await extractSize(currentPage, candidateEnd + 1);
+        probes++;
+        if (nextSize > maxSize) break;
+        candidateEnd++;
+        size = nextSize;
+      }
+    } else {
+      while (candidateEnd > currentPage) {
+        candidateEnd--;
+        size = await extractSize(currentPage, candidateEnd);
+        if (size <= maxSize) break;
+      }
+      if (candidateEnd === currentPage && size > maxSize) {
+        // single page exceeds limit - accept it and move on
+      }
+    }
+
+    ranges.push({ start: currentPage, end: candidateEnd });
+    currentPage = candidateEnd + 1;
   }
 
   return ranges;
@@ -141,6 +154,13 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
     "-sDEVICE=pdfwrite",
     "-dPDFACompatibilityPolicy=1",
     `-dPDFSETTINGS=/prepress`,
+    "-dNumRenderingThreads=4",
+    "-dBandBufferSpace=500000000",
+    "-dBufferSpace=1000000000",
+    "-sBandListStorage=memory",
+    "-dMaxBitmap=1000000000",
+    "-dCompressFonts=true",
+    "-dDetectDuplicateImages=true",
     `--permit-file-read=${iccPath}`,
     `-sOutputFile=${outputPath}`,
     tmpDefPath,
@@ -148,7 +168,7 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
   ];
 
   try {
-    await execFileAsync("gs", args);
+    await execFileAsync("gs", args, { maxBuffer: 50 * 1024 * 1024 });
   } finally {
     try { fs.unlinkSync(tmpDefPath); } catch {}
   }
