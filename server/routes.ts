@@ -230,14 +230,23 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Nessun file caricato" });
     }
 
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.setHeader("Transfer-Encoding", "chunked");
-    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
     res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+    if (res.socket) {
+      res.socket.setNoDelay(true);
+      res.socket.setKeepAlive(true);
+    }
 
     function sendLog(message: string) {
       try {
-        res.write(JSON.stringify({ type: "log", message }) + "\n");
+        res.write(`data: ${JSON.stringify({ type: "log", message })}\n\n`);
+        if (typeof (res as any).flush === "function") {
+          (res as any).flush();
+        }
       } catch {}
     }
 
@@ -406,14 +415,14 @@ export async function registerRoutes(
         }
       }
 
-      res.write(JSON.stringify({ type: "result", data: resultData }) + "\n");
+      res.write(`data: ${JSON.stringify({ type: "result", data: resultData })}\n\n`);
       return res.end();
     } catch (err: any) {
       cleanupDir(sessionDir);
       for (const file of files) {
         try { fs.unlinkSync(file.path); } catch {}
       }
-      res.write(JSON.stringify({ type: "error", message: err.message || "Errore durante la conversione" }) + "\n");
+      res.write(`data: ${JSON.stringify({ type: "error", message: err.message || "Errore durante la conversione" })}\n\n`);
       return res.end();
     }
   });

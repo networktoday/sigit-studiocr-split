@@ -155,13 +155,16 @@ export default function Converter() {
         if (done) break;
 
         buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
+        for (const event of events) {
+          const dataLine = event.split("\n").find(l => l.startsWith("data: "));
+          if (!dataLine) continue;
+          const jsonStr = dataLine.slice(6);
+          if (!jsonStr.trim()) continue;
           try {
-            const parsed = JSON.parse(line);
+            const parsed = JSON.parse(jsonStr);
             if (parsed.type === "log") {
               const msg = parsed.message as string;
               setLogMessages((prev) => [...prev, msg]);
