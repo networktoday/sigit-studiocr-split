@@ -16,6 +16,9 @@ import {
   Pencil,
   Play,
   Mail,
+  CheckCircle2,
+  Scissors,
+  ScanSearch,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
@@ -66,13 +69,10 @@ export default function Converter() {
   const [isStaged, setIsStaged] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const [logMessages, setLogMessages] = useState<string[]>([]);
-  const logEndRef = useRef<HTMLDivElement | null>(null);
   const [notifyEmail, setNotifyEmail] = useState("");
   const [emailSent, setEmailSent] = useState(false);
-
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logMessages]);
+  const [currentPhase, setCurrentPhase] = useState<"idle" | "uploading" | "converting" | "splitting" | "verifying" | "done" | "error">("idle");
+  const [phaseDetail, setPhaseDetail] = useState("");
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -107,6 +107,8 @@ export default function Converter() {
     setIsProcessing(true);
     setErrorMessage(null);
     setLogMessages([]);
+    setCurrentPhase("uploading");
+    setPhaseDetail("Invio file al server...");
 
     const formData = new FormData();
     files.forEach((f) => {
@@ -134,6 +136,8 @@ export default function Converter() {
       });
 
       setFiles((prev) => prev.map((f) => ({ ...f, status: "processing", progress: 60 })));
+      setCurrentPhase("converting");
+      setPhaseDetail("Avvio conversione...");
 
       if (!response.body) {
         throw new Error("Errore: risposta senza contenuto");
@@ -159,9 +163,39 @@ export default function Converter() {
           try {
             const parsed = JSON.parse(line);
             if (parsed.type === "log") {
-              setLogMessages((prev) => [...prev, parsed.message]);
-              if (parsed.message.includes("Notifica email inviata")) {
+              const msg = parsed.message as string;
+              setLogMessages((prev) => [...prev, msg]);
+
+              if (msg.includes("Notifica email inviata")) {
                 emailConfirmed = true;
+              }
+
+              if (msg.includes("Elaborazione:")) {
+                setCurrentPhase("converting");
+                setPhaseDetail(msg.replace(/\[\d+\/\d+\]\s*/, ""));
+              } else if (msg.includes("Conversione in formato PDF/A-1b")) {
+                setCurrentPhase("converting");
+                setPhaseDetail("Conversione in PDF/A-1b in corso...");
+              } else if (msg.includes("Conversione PDF/A-1b completata")) {
+                setPhaseDetail("Conversione completata, analisi dimensione...");
+              } else if (msg.includes("Dimensione convertita")) {
+                setPhaseDetail(msg.replace(/\[\d+\/\d+\]\s*/, ""));
+              } else if (msg.includes("divisione in parti") || msg.includes("Diviso in")) {
+                setCurrentPhase("splitting");
+                setPhaseDetail(msg.replace(/\[\d+\/\d+\]\s*/, ""));
+              } else if (msg.includes("Conversione parte")) {
+                setCurrentPhase("splitting");
+                setPhaseDetail(msg.replace(/\[\d+\/\d+\]\s*/, ""));
+              } else if (msg.includes("Parte ") && msg.includes("MB")) {
+                setPhaseDetail(msg.replace(/\[\d+\/\d+\]\s*/, ""));
+              } else if (msg.includes("Verifica conformità")) {
+                setCurrentPhase("verifying");
+                setPhaseDetail("Verifica conformità PDF/A-1b...");
+              } else if (msg.includes("Conforme:") || msg.includes("Non conforme")) {
+                setPhaseDetail(msg.replace(/\[\d+\/\d+\]\s*/, ""));
+              } else if (msg.includes("Elaborazione completata")) {
+                setCurrentPhase("done");
+                setPhaseDetail("Tutti i file sono pronti!");
               }
             } else if (parsed.type === "result") {
               finalResult = parsed.data;
@@ -198,6 +232,8 @@ export default function Converter() {
 
       setFiles((prev) => prev.map((f) => ({ ...f, status: "error", progress: 0 })));
       setIsProcessing(false);
+      setCurrentPhase("error");
+      setPhaseDetail(err.message || "Errore durante la conversione");
       setErrorMessage(err.message || "Errore sconosciuto durante la conversione");
 
       toast({
@@ -235,6 +271,8 @@ export default function Converter() {
     setLogMessages([]);
     setNotifyEmail("");
     setEmailSent(false);
+    setCurrentPhase("idle");
+    setPhaseDetail("");
   };
 
   const handleDownload = () => {
@@ -461,32 +499,8 @@ export default function Converter() {
               )}
             </div>
 
-            {(isProcessing || logMessages.length > 0) && (
-              <div data-testid="console-log" className="bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden">
-                <div className="flex items-center gap-2 px-4 py-2 bg-zinc-900 border-b border-zinc-800">
-                  <div className="flex gap-1.5">
-                    <span className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
-                    <span className="h-2.5 w-2.5 rounded-full bg-yellow-500/80" />
-                    <span className="h-2.5 w-2.5 rounded-full bg-green-500/80" />
-                  </div>
-                  <span className="text-xs font-mono text-zinc-400">Console</span>
-                </div>
-                <div className="p-3 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
-                  {logMessages.map((msg, i) => (
-                    <div key={i} className="flex gap-2 text-zinc-300">
-                      <span className="text-zinc-600 select-none shrink-0">{String(i + 1).padStart(2, "0")}</span>
-                      <span>{msg}</span>
-                    </div>
-                  ))}
-                  {isProcessing && (
-                    <div className="flex gap-2 text-emerald-400 animate-pulse">
-                      <span className="text-zinc-600 select-none shrink-0">{String(logMessages.length + 1).padStart(2, "0")}</span>
-                      <span>In attesa...</span>
-                    </div>
-                  )}
-                  <div ref={logEndRef} />
-                </div>
-              </div>
+            {currentPhase !== "idle" && (
+              <ProgressTracker currentPhase={currentPhase} phaseDetail={phaseDetail} />
             )}
           </motion.div>
         )}
@@ -654,6 +668,94 @@ function FileRow({
           </div>
           )}
         </div>
+      </div>
+    </motion.div>
+  );
+}
+
+type Phase = "idle" | "uploading" | "converting" | "splitting" | "verifying" | "done" | "error";
+
+const PHASES: { key: Phase; label: string; icon: React.ReactNode }[] = [
+  { key: "uploading", label: "Caricamento", icon: <Upload className="h-4 w-4" /> },
+  { key: "converting", label: "Conversione PDF/A-1b", icon: <FileCheck className="h-4 w-4" /> },
+  { key: "splitting", label: "Suddivisione", icon: <Scissors className="h-4 w-4" /> },
+  { key: "verifying", label: "Verifica", icon: <ScanSearch className="h-4 w-4" /> },
+  { key: "done", label: "Completato", icon: <CheckCircle2 className="h-4 w-4" /> },
+];
+
+function getPhaseIndex(phase: Phase): number {
+  return PHASES.findIndex(p => p.key === phase);
+}
+
+function ProgressTracker({ currentPhase, phaseDetail }: { currentPhase: Phase; phaseDetail: string }) {
+  const currentIndex = getPhaseIndex(currentPhase);
+  const showSplitting = currentIndex >= getPhaseIndex("splitting");
+  const displayPhases = showSplitting ? PHASES : PHASES.filter(p => p.key !== "splitting");
+
+  return (
+    <motion.div
+      data-testid="progress-tracker"
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-xl border bg-card p-5 space-y-4"
+    >
+      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+        <Loader2 className={`h-4 w-4 ${currentPhase !== "done" && currentPhase !== "error" ? "animate-spin" : ""}`} />
+        Stato elaborazione
+      </div>
+
+      <div className="space-y-0">
+        {displayPhases.map((phase, i) => {
+          const phaseIdx = getPhaseIndex(phase.key);
+          const isActive = phase.key === currentPhase;
+          const isCompleted = currentIndex > phaseIdx;
+          const isPending = currentIndex < phaseIdx;
+
+          return (
+            <div key={phase.key} className="flex items-stretch gap-3">
+              <div className="flex flex-col items-center">
+                <div
+                  className={`
+                    h-8 w-8 rounded-full flex items-center justify-center shrink-0 transition-all duration-300
+                    ${isCompleted ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400" : ""}
+                    ${isActive ? "bg-primary/15 text-primary ring-2 ring-primary/30 scale-110" : ""}
+                    ${isPending ? "bg-muted text-muted-foreground/40" : ""}
+                    ${currentPhase === "error" && isActive ? "bg-destructive/15 text-destructive ring-destructive/30" : ""}
+                  `}
+                >
+                  {isCompleted ? <CheckCircle2 className="h-4 w-4" /> : phase.icon}
+                </div>
+                {i < displayPhases.length - 1 && (
+                  <div
+                    className={`w-0.5 flex-1 min-h-[16px] transition-colors duration-300
+                      ${isCompleted ? "bg-emerald-300 dark:bg-emerald-700" : "bg-border"}
+                    `}
+                  />
+                )}
+              </div>
+              <div className={`pb-4 pt-1 ${i === displayPhases.length - 1 ? "pb-0" : ""}`}>
+                <span
+                  className={`text-sm font-medium transition-colors
+                    ${isCompleted ? "text-emerald-600 dark:text-emerald-400" : ""}
+                    ${isActive ? "text-foreground" : ""}
+                    ${isPending ? "text-muted-foreground/50" : ""}
+                  `}
+                >
+                  {phase.label}
+                </span>
+                {isActive && phaseDetail && (
+                  <motion.p
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    className={`text-xs mt-0.5 ${currentPhase === "error" ? "text-destructive" : "text-muted-foreground"}`}
+                  >
+                    {phaseDetail}
+                  </motion.p>
+                )}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </motion.div>
   );
