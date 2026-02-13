@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -64,6 +64,12 @@ export default function Converter() {
   const [customName, setCustomName] = useState("");
   const [isStaged, setIsStaged] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const [logMessages, setLogMessages] = useState<string[]>([]);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logMessages]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
@@ -97,6 +103,7 @@ export default function Converter() {
 
     setIsProcessing(true);
     setErrorMessage(null);
+    setLogMessages([]);
 
     const formData = new FormData();
     files.forEach((f) => {
@@ -113,24 +120,56 @@ export default function Converter() {
     setFiles((prev) => prev.map((f) => ({ ...f, status: "uploading", progress: 30 })));
 
     try {
-      setFiles((prev) => prev.map((f) => ({ ...f, progress: 60 })));
-
       const response = await fetch("/api/convert", {
         method: "POST",
         body: formData,
         signal: controller.signal,
       });
 
-      setFiles((prev) => prev.map((f) => ({ ...f, status: "processing", progress: 80 })));
+      setFiles((prev) => prev.map((f) => ({ ...f, status: "processing", progress: 60 })));
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || "Errore durante la conversione");
+      if (!response.body) {
+        throw new Error("Errore: risposta senza contenuto");
       }
 
-      const result: ConversionResult = await response.json();
-      setConversionResult(result);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalResult: ConversionResult | null = null;
+      let streamError: string | null = null;
 
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            if (parsed.type === "log") {
+              setLogMessages((prev) => [...prev, parsed.message]);
+            } else if (parsed.type === "result") {
+              finalResult = parsed.data;
+            } else if (parsed.type === "error") {
+              streamError = parsed.message;
+            }
+          } catch {}
+        }
+      }
+
+      if (streamError) {
+        throw new Error(streamError);
+      }
+
+      if (!finalResult) {
+        throw new Error("Nessun risultato ricevuto dal server");
+      }
+
+      setConversionResult(finalResult);
       setFiles((prev) => prev.map((f) => ({ ...f, status: "done", progress: 100 })));
       setIsProcessing(false);
       setIsCompleted(true);
@@ -179,6 +218,7 @@ export default function Converter() {
     setErrorMessage(null);
     setCustomName("");
     setIsStaged(false);
+    setLogMessages([]);
   };
 
   const handleDownload = () => {
@@ -368,6 +408,34 @@ export default function Converter() {
                 )
               )}
             </div>
+
+            {(isProcessing || logMessages.length > 0) && (
+              <div data-testid="console-log" className="bg-zinc-950 rounded-lg border border-zinc-800 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2 bg-zinc-900 border-b border-zinc-800">
+                  <div className="flex gap-1.5">
+                    <span className="h-2.5 w-2.5 rounded-full bg-red-500/80" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-yellow-500/80" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-green-500/80" />
+                  </div>
+                  <span className="text-xs font-mono text-zinc-400">Console</span>
+                </div>
+                <div className="p-3 max-h-48 overflow-y-auto font-mono text-xs space-y-1">
+                  {logMessages.map((msg, i) => (
+                    <div key={i} className="flex gap-2 text-zinc-300">
+                      <span className="text-zinc-600 select-none shrink-0">{String(i + 1).padStart(2, "0")}</span>
+                      <span>{msg}</span>
+                    </div>
+                  ))}
+                  {isProcessing && (
+                    <div className="flex gap-2 text-emerald-400 animate-pulse">
+                      <span className="text-zinc-600 select-none shrink-0">{String(logMessages.length + 1).padStart(2, "0")}</span>
+                      <span>In attesa...</span>
+                    </div>
+                  )}
+                  <div ref={logEndRef} />
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
       </div>

@@ -190,6 +190,17 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Nessun file caricato" });
     }
 
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    res.setHeader("Transfer-Encoding", "chunked");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+
+    function sendLog(message: string) {
+      try {
+        res.write(JSON.stringify({ type: "log", message }) + "\n");
+      } catch {}
+    }
+
     const customName = typeof req.body?.customName === "string" && req.body.customName.trim()
       ? req.body.customName.trim().replace(/[<>:"/\\|?*]/g, "_")
       : null;
@@ -213,26 +224,34 @@ export async function registerRoutes(
         const outputBaseName = (customName && files.length === 1) ? customName : originalBaseName;
         const stat = fs.statSync(file.path);
 
+        const fileLabel = `[${fi + 1}/${files.length}]`;
+        sendLog(`${fileLabel} Elaborazione: ${originalName} (${(stat.size / 1024 / 1024).toFixed(2)} MB)`);
         log(`Processing: ${originalName} (${(stat.size / 1024 / 1024).toFixed(2)} MB) → output as "${outputBaseName}"`);
 
         const tempConvertedPath = path.join(splitDir, `${originalBaseName}_pdfa_full.pdf`);
 
         try {
+          sendLog(`${fileLabel} Conversione in formato PDF/A-1b in corso...`);
           log(`Converting to PDF/A: ${originalName}`);
           await convertToPdfA(file.path, tempConvertedPath);
+          sendLog(`${fileLabel} Conversione PDF/A-1b completata.`);
         } catch (err: any) {
           log(`Error converting ${originalName}: ${err.message}`);
           throw new Error(`Errore nella conversione di ${originalName}: ${err.message}`);
         }
 
         const convertedSize = fs.statSync(tempConvertedPath).size;
+        sendLog(`${fileLabel} Dimensione convertita: ${(convertedSize / 1024 / 1024).toFixed(2)} MB`);
         log(`Converted size: ${(convertedSize / 1024 / 1024).toFixed(2)} MB`);
 
         if (convertedSize > MAX_SIZE_BYTES) {
+          sendLog(`${fileLabel} File superiore a 9MB, divisione in parti...`);
           log(`Output > 9MB, splitting original PDF and converting each part separately...`);
 
           const pageRanges = await findPageRangesForSize(tempConvertedPath, MAX_SIZE_BYTES);
           fs.unlinkSync(tempConvertedPath);
+
+          sendLog(`${fileLabel} Diviso in ${pageRanges.length} parti. Conversione di ogni parte...`);
 
           const partsDetail: PartVerification[] = [];
           for (let i = 0; i < pageRanges.length; i++) {
@@ -247,6 +266,7 @@ export async function registerRoutes(
             const finalName = `${outputBaseName}_parte${i + 1}.pdf`;
             const finalPath = path.join(convertedDir, finalName);
 
+            sendLog(`${fileLabel} Conversione parte ${i + 1}/${pageRanges.length} (pagine ${start}-${end})...`);
             log(`  Converting part ${i + 1} (pages ${start}-${end}) to PDF/A...`);
             await convertToPdfA(partOrigPath, finalPath);
             try { fs.unlinkSync(partOrigPath); } catch {}
@@ -254,6 +274,7 @@ export async function registerRoutes(
             const partSize = fs.statSync(finalPath).size;
             const verification = await verifyPdfA(finalPath);
             partsDetail.push({ name: finalName, size: partSize, verified: verification.valid, conformance: verification.conformance });
+            sendLog(`${fileLabel} Parte ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB) - ${verification.valid ? verification.conformance : "Non conforme"}`);
             log(`  Part ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB) - ${verification.valid ? verification.conformance : "NON CONFORME"}`);
           }
 
@@ -273,7 +294,9 @@ export async function registerRoutes(
           const finalPath = path.join(convertedDir, outputFileName);
           fs.renameSync(tempConvertedPath, finalPath);
 
+          sendLog(`${fileLabel} Verifica conformità PDF/A-1b...`);
           const verification = await verifyPdfA(finalPath);
+          sendLog(`${fileLabel} ${verification.valid ? `Conforme: ${verification.conformance}` : "Attenzione: non conforme"}`);
           log(`Verification: ${verification.valid ? verification.conformance : "NON CONFORME"}`);
 
           results.push({
@@ -295,18 +318,23 @@ export async function registerRoutes(
       }).join("_");
       fs.writeFileSync(path.join(sessionDir, "original_names.json"), JSON.stringify([zipBaseName]));
 
-      return res.json({
+      sendLog("Elaborazione completata. File pronti per il download.");
+
+      const resultData = {
         sessionId,
         files: results,
         totalSize: results.reduce((acc, r) => acc + r.outputSize, 0),
-      });
+      };
+
+      res.write(JSON.stringify({ type: "result", data: resultData }) + "\n");
+      return res.end();
     } catch (err: any) {
       cleanupDir(sessionDir);
-      // Cleanup uploaded files
       for (const file of files) {
         try { fs.unlinkSync(file.path); } catch {}
       }
-      return res.status(500).json({ message: err.message || "Errore durante la conversione" });
+      res.write(JSON.stringify({ type: "error", message: err.message || "Errore durante la conversione" }) + "\n");
+      return res.end();
     }
   });
 
