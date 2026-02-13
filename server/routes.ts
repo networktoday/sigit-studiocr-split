@@ -274,8 +274,14 @@ export async function registerRoutes(
             const partSize = fs.statSync(finalPath).size;
             const verification = await verifyPdfA(finalPath);
             partsDetail.push({ name: finalName, size: partSize, verified: verification.valid, conformance: verification.conformance });
-            sendLog(`${fileLabel} Parte ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB) - ${verification.valid ? verification.conformance : "Non conforme"}`);
-            log(`  Part ${i + 1}: ${finalName} (${(partSize / 1024 / 1024).toFixed(2)} MB) - ${verification.valid ? verification.conformance : "NON CONFORME"}`);
+            const partMB = (partSize / 1024 / 1024).toFixed(2);
+            if (partSize > MAX_SIZE_BYTES) {
+              sendLog(`${fileLabel} ⚠ ATTENZIONE: Parte ${i + 1} (${partMB} MB) supera il limite di 9MB! Contiene pagine troppo grandi per essere ulteriormente divise.`);
+              log(`  WARNING: Part ${i + 1}: ${finalName} (${partMB} MB) EXCEEDS 9MB LIMIT`);
+            } else {
+              sendLog(`${fileLabel} Parte ${i + 1}: ${finalName} (${partMB} MB) - ${verification.valid ? verification.conformance : "Non conforme"}`);
+              log(`  Part ${i + 1}: ${finalName} (${partMB} MB) - ${verification.valid ? verification.conformance : "NON CONFORME"}`);
+            }
           }
 
           const allVerified = partsDetail.every(p => p.verified);

@@ -1,6 +1,6 @@
 # Overview
 
-This is a **PDF to PDF/A Converter** web application (Italian-language UI: "Convertitore PDF/A"). Users upload PDF files through a drag-and-drop interface, and the server converts them to PDF/A format using system-level tools (qpdf). Large PDFs are automatically split into smaller parts to stay under a 9MB size limit. The converted files can be downloaded individually or as a ZIP archive.
+This is a **PDF to PDF/A-1b Converter** web application (Italian-language UI: "Convertitore PDF/A-1b"). Users upload PDF files through a drag-and-drop interface, and the server converts them to PDF/A-1b format (ISO 19005-1) using Ghostscript with embedded sRGB ICC profile. Large PDFs are automatically split into smaller parts to stay under a **9MB size limit** (mandatory for SIGIT - Tribunale Telematico). The converted files can be downloaded as a ZIP archive. Real-time console logs show conversion progress to the user.
 
 # User Preferences
 
