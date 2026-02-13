@@ -168,7 +168,7 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
   ];
 
   try {
-    await execFileAsync("gs", args, { maxBuffer: 50 * 1024 * 1024 });
+    await execFileAsync("gs", args, { maxBuffer: 500 * 1024 * 1024 });
   } finally {
     try { fs.unlinkSync(tmpDefPath); } catch {}
   }
@@ -231,11 +231,11 @@ function broadcastToSession(sessionId: string, event: { type: string; message?: 
   if (!session) return;
   session.logs.push(event);
   const payload = `data: ${JSON.stringify(event)}\n\n`;
-  for (const client of session.clients) {
+  session.clients.forEach((client) => {
     try {
       client.write(payload);
     } catch {}
-  }
+  });
 }
 
 function cleanupSession(sessionId: string, delay = 60000) {

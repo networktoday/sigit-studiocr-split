@@ -136,8 +136,14 @@ export default function Converter() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: "Errore del server" }));
-        throw new Error(errorData.message || "Errore del server");
+        let errMsg = "Errore del server";
+        if (response.status === 413) {
+          errMsg = "Il file è troppo grande per essere caricato. Il limite massimo in produzione è circa 50MB. Prova con un file più piccolo.";
+        } else {
+          const errorData = await response.json().catch(() => null);
+          if (errorData?.message) errMsg = errorData.message;
+        }
+        throw new Error(errMsg);
       }
 
       const { sessionId } = await response.json();
