@@ -7,6 +7,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import archiver from "archiver";
 import { log } from "./index";
+import { sendConversionEmail, isValidEmail } from "./email";
 
 const execFileAsync = promisify(execFile);
 
@@ -224,6 +225,12 @@ export async function registerRoutes(
       ? req.body.customName.trim().replace(/[<>:"/\\|?*]/g, "_")
       : null;
 
+    const rawEmail = typeof req.body?.notifyEmail === "string" ? req.body.notifyEmail.trim() : "";
+    const notifyEmail = rawEmail && isValidEmail(rawEmail) ? rawEmail : null;
+    if (rawEmail && !notifyEmail) {
+      sendLog("Avviso: indirizzo email non valido, la notifica non verrà inviata.");
+    }
+
     const sessionId = Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
     const sessionDir = path.join(OUTPUT_DIR, sessionId);
     const splitDir = path.join(sessionDir, "split");
@@ -350,6 +357,34 @@ export async function registerRoutes(
         files: results,
         totalSize: results.reduce((acc, r) => acc + r.outputSize, 0),
       };
+
+      if (notifyEmail) {
+        try {
+          const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+          const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost:5000";
+          const downloadUrl = `${protocol}://${host}/api/download/${sessionId}`;
+
+          await sendConversionEmail({
+            recipientEmail: notifyEmail,
+            fileCount: results.length,
+            totalSize: resultData.totalSize,
+            fileDetails: results.map(r => ({
+              name: r.outputName,
+              size: r.outputSize,
+              verified: r.verified,
+              conformance: r.conformance,
+              wasSplit: r.wasSplit,
+              parts: r.parts,
+            })),
+            downloadUrl,
+          });
+          sendLog(`✉ Notifica email inviata a ${notifyEmail}`);
+          log(`Email notification sent to ${notifyEmail}`);
+        } catch (emailErr: any) {
+          sendLog(`Avviso: impossibile inviare notifica email (${emailErr.message})`);
+          log(`Email notification failed: ${emailErr.message}`);
+        }
+      }
 
       res.write(JSON.stringify({ type: "result", data: resultData }) + "\n");
       return res.end();

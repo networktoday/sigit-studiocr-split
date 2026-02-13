@@ -15,6 +15,7 @@ import {
   ShieldX,
   Pencil,
   Play,
+  Mail,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { motion, AnimatePresence } from "framer-motion";
@@ -66,6 +67,8 @@ export default function Converter() {
   const abortRef = useRef<AbortController | null>(null);
   const [logMessages, setLogMessages] = useState<string[]>([]);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const [notifyEmail, setNotifyEmail] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -114,6 +117,10 @@ export default function Converter() {
       formData.append("customName", customName.trim());
     }
 
+    if (notifyEmail.trim()) {
+      formData.append("notifyEmail", notifyEmail.trim());
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
 
@@ -137,6 +144,7 @@ export default function Converter() {
       let buffer = "";
       let finalResult: ConversionResult | null = null;
       let streamError: string | null = null;
+      let emailConfirmed = false;
 
       while (true) {
         const { done, value } = await reader.read();
@@ -152,6 +160,9 @@ export default function Converter() {
             const parsed = JSON.parse(line);
             if (parsed.type === "log") {
               setLogMessages((prev) => [...prev, parsed.message]);
+              if (parsed.message.includes("Notifica email inviata")) {
+                emailConfirmed = true;
+              }
             } else if (parsed.type === "result") {
               finalResult = parsed.data;
             } else if (parsed.type === "error") {
@@ -174,10 +185,13 @@ export default function Converter() {
       setIsProcessing(false);
       setIsCompleted(true);
       setIsStaged(false);
+      setEmailSent(emailConfirmed);
 
       toast({
         title: "Conversione Completata",
-        description: "Tutti i file sono stati convertiti in formato PDF/A-1b e sono pronti per il download.",
+        description: emailConfirmed
+          ? "File convertiti in PDF/A-1b. Notifica email inviata."
+          : "Tutti i file sono stati convertiti in formato PDF/A-1b e sono pronti per il download.",
       });
     } catch (err: any) {
       if (err.name === "AbortError") return;
@@ -219,6 +233,8 @@ export default function Converter() {
     setCustomName("");
     setIsStaged(false);
     setLogMessages([]);
+    setNotifyEmail("");
+    setEmailSent(false);
   };
 
   const handleDownload = () => {
@@ -313,6 +329,42 @@ export default function Converter() {
                 <p className="text-xs text-muted-foreground mt-2">
                   Modifica il nome prima della conversione. Se il file viene diviso, le parti saranno nominate come: {customName || "nome"}_parte1.pdf, {customName || "nome"}_parte2.pdf, ecc.
                 </p>
+              </motion.div>
+            )}
+
+            {isStaged && !isProcessing && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-muted/50 rounded-lg p-4"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">Notifica email (opzionale)</span>
+                </div>
+                <Input
+                  data-testid="input-notify-email"
+                  type="email"
+                  value={notifyEmail}
+                  onChange={(e) => setNotifyEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && startConversion()}
+                  className="text-sm"
+                  placeholder="Inserisci la tua email per ricevere una notifica..."
+                />
+                <p className="text-xs text-muted-foreground mt-2">
+                  Ricevi un'email con il riepilogo e il link per scaricare i file convertiti.
+                </p>
+              </motion.div>
+            )}
+
+            {isCompleted && emailSent && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-3 text-sm text-emerald-700 dark:text-emerald-400 flex items-center gap-2"
+              >
+                <Mail className="h-4 w-4" />
+                Notifica email inviata a {notifyEmail}
               </motion.div>
             )}
 

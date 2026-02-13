@@ -25,6 +25,7 @@ Preferred communication style: Simple, everyday language.
 - **PDF Processing**: Uses `qpdf` system binary (via `child_process.execFile`) to count pages and split large PDFs
 - **File Output**: Converted files stored in `/tmp/pdfa_output`; archiver package creates ZIP downloads for multiple files
 - **Size Limit**: Files over 9MB are automatically split into smaller parts using qpdf
+- **Email Notifications**: Optional email notification via SendGrid (Replit connector) when conversion completes; module in `server/email.ts`
 - **API Pattern**: RESTful endpoints under `/api/` prefix
 
 ## Data Storage
@@ -55,4 +56,5 @@ Preferred communication style: Simple, everyday language.
 - **Drizzle ORM**: Database ORM with PostgreSQL dialect
 - **qpdf**: System-level binary required for PDF page counting and splitting (must be installed on the system)
 - **Replit Plugins**: `@replit/vite-plugin-runtime-error-modal`, `@replit/vite-plugin-cartographer`, `@replit/vite-plugin-dev-banner` for Replit platform integration
+- **SendGrid**: Email service for conversion completion notifications, connected via Replit connector (`@sendgrid/mail`)
 - **Google Fonts**: Inter and JetBrains Mono loaded from `fonts.googleapis.com`
