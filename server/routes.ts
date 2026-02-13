@@ -244,6 +244,35 @@ function cleanupSession(sessionId: string, delay = 60000) {
   }, delay);
 }
 
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
+function cleanupOldFiles() {
+  for (const dir of [OUTPUT_DIR, UPLOAD_DIR]) {
+    if (!fs.existsSync(dir)) continue;
+    try {
+      const entries = fs.readdirSync(dir);
+      const now = Date.now();
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry);
+        try {
+          const stat = fs.statSync(fullPath);
+          if (now - stat.mtimeMs > ONE_HOUR_MS) {
+            if (stat.isDirectory()) {
+              fs.rmSync(fullPath, { recursive: true, force: true });
+            } else {
+              fs.unlinkSync(fullPath);
+            }
+            log(`Cleanup: removed old file/dir ${entry}`);
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+}
+
+setInterval(cleanupOldFiles, 10 * 60 * 1000);
+cleanupOldFiles();
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
