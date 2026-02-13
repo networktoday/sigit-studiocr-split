@@ -389,7 +389,7 @@ export default function Converter() {
                   placeholder="Inserisci la tua email per ricevere una notifica..."
                 />
                 <p className="text-xs text-muted-foreground mt-2">
-                  Ricevi un'email con il riepilogo e il link per scaricare i file convertiti.
+                  Ricevi un'email con il riepilogo e il link per scaricare i file convertiti. I file generati verranno automaticamente eliminati dal server dopo 1 ora dalla creazione.
                 </p>
               </motion.div>
             )}
