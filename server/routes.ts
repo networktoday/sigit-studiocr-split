@@ -153,7 +153,7 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
     "-sColorConversionStrategy=UseDeviceIndependentColor",
     "-sDEVICE=pdfwrite",
     "-dPDFACompatibilityPolicy=1",
-    `-dPDFSETTINGS=/prepress`,
+    `-dPDFSETTINGS=/ebook`,
     "-dNumRenderingThreads=4",
     "-dBandBufferSpace=500000000",
     "-dBufferSpace=1000000000",
