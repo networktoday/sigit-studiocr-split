@@ -492,7 +492,7 @@ export default function Converter() {
               )}
             </div>
 
-            {currentPhase !== "idle" && (
+            {currentPhase !== "idle" && currentPhase !== "done" && (
               <ProgressTracker currentPhase={currentPhase} phaseDetail={phaseDetail} />
             )}
           </motion.div>
