@@ -38,8 +38,27 @@ async function getPageCount(pdfPath: string): Promise<number> {
 }
 
 import { fileURLToPath } from "url";
-const __filename_local = fileURLToPath(import.meta.url);
-const __dirname_local = path.dirname(__filename_local);
+
+const __server_dir = (() => {
+  try {
+    return path.dirname(fileURLToPath(import.meta.url));
+  } catch {
+    return typeof __dirname !== "undefined" ? __dirname : process.cwd();
+  }
+})();
+
+function resolveServerFile(filename: string): string {
+  const candidates = [
+    path.join(__server_dir, filename),
+    path.resolve("server", filename),
+    path.join(process.cwd(), "server", filename),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return candidates[0];
+}
+
 async function findPageRangesForSize(convertedPdfPath: string, maxSize: number): Promise<{ start: number; end: number }[]> {
   const totalPages = await getPageCount(convertedPdfPath);
   const fileSize = fs.statSync(convertedPdfPath).size;
@@ -96,8 +115,8 @@ async function findPageRangesForSize(convertedPdfPath: string, maxSize: number):
   return ranges;
 }
 
-const ICC_PROFILE_PATH = path.resolve(__dirname_local, "srgb.icc");
-const PDFA_DEF_TEMPLATE = path.resolve(__dirname_local, "PDFA_def.ps");
+const ICC_PROFILE_PATH = resolveServerFile("srgb.icc");
+const PDFA_DEF_TEMPLATE = resolveServerFile("PDFA_def.ps");
 
 async function convertToPdfA(inputPath: string, outputPath: string): Promise<void> {
   const iccPath = fs.existsSync(ICC_PROFILE_PATH)
