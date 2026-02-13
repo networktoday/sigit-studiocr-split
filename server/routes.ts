@@ -1,4 +1,4 @@
-import type { Express } from "express";
+import type { Express, Response } from "express";
 import { createServer, type Server } from "http";
 import multer from "multer";
 import path from "path";
@@ -218,6 +218,32 @@ interface ConvertedFile {
   partsDetail?: PartVerification[];
 }
 
+interface SessionProgress {
+  logs: { type: string; message?: string; data?: any }[];
+  clients: Set<Response>;
+  done: boolean;
+}
+
+const progressStore = new Map<string, SessionProgress>();
+
+function broadcastToSession(sessionId: string, event: { type: string; message?: string; data?: any }) {
+  const session = progressStore.get(sessionId);
+  if (!session) return;
+  session.logs.push(event);
+  const payload = `data: ${JSON.stringify(event)}\n\n`;
+  for (const client of session.clients) {
+    try {
+      client.write(payload);
+    } catch {}
+  }
+}
+
+function cleanupSession(sessionId: string, delay = 60000) {
+  setTimeout(() => {
+    progressStore.delete(sessionId);
+  }, delay);
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express
@@ -230,35 +256,12 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Nessun file caricato" });
     }
 
-    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-    if (res.socket) {
-      res.socket.setNoDelay(true);
-      res.socket.setKeepAlive(true);
-    }
-
-    function sendLog(message: string) {
-      try {
-        res.write(`data: ${JSON.stringify({ type: "log", message })}\n\n`);
-        if (typeof (res as any).flush === "function") {
-          (res as any).flush();
-        }
-      } catch {}
-    }
-
     const customName = typeof req.body?.customName === "string" && req.body.customName.trim()
       ? req.body.customName.trim().replace(/[<>:"/\\|?*]/g, "_")
       : null;
 
     const rawEmail = typeof req.body?.notifyEmail === "string" ? req.body.notifyEmail.trim() : "";
     const notifyEmail = rawEmail && isValidEmail(rawEmail) ? rawEmail : null;
-    if (rawEmail && !notifyEmail) {
-      sendLog("Avviso: indirizzo email non valido, la notifica non verrà inviata.");
-    }
 
     const sessionId = Date.now().toString(36) + Math.random().toString(36).substring(2, 8);
     const sessionDir = path.join(OUTPUT_DIR, sessionId);
@@ -268,6 +271,18 @@ export async function registerRoutes(
     ensureDir(sessionDir);
     ensureDir(splitDir);
     ensureDir(convertedDir);
+
+    progressStore.set(sessionId, { logs: [], clients: new Set(), done: false });
+
+    res.json({ sessionId });
+
+    function sendLog(message: string) {
+      broadcastToSession(sessionId, { type: "log", message });
+    }
+
+    if (rawEmail && !notifyEmail) {
+      sendLog("Avviso: indirizzo email non valido, la notifica non verrà inviata.");
+    }
 
     const results: ConvertedFile[] = [];
 
@@ -415,16 +430,55 @@ export async function registerRoutes(
         }
       }
 
-      res.write(`data: ${JSON.stringify({ type: "result", data: resultData })}\n\n`);
-      return res.end();
+      broadcastToSession(sessionId, { type: "result", data: resultData });
+      const session = progressStore.get(sessionId);
+      if (session) session.done = true;
+      cleanupSession(sessionId);
     } catch (err: any) {
       cleanupDir(sessionDir);
       for (const file of files) {
         try { fs.unlinkSync(file.path); } catch {}
       }
-      res.write(`data: ${JSON.stringify({ type: "error", message: err.message || "Errore durante la conversione" })}\n\n`);
-      return res.end();
+      broadcastToSession(sessionId, { type: "error", message: err.message || "Errore durante la conversione" });
+      const session = progressStore.get(sessionId);
+      if (session) session.done = true;
+      cleanupSession(sessionId);
     }
+  });
+
+  app.get("/api/progress/:sessionId", (req, res) => {
+    const { sessionId } = req.params;
+    const session = progressStore.get(sessionId);
+
+    if (!session) {
+      return res.status(404).json({ message: "Sessione non trovata" });
+    }
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
+
+    if (res.socket) {
+      res.socket.setNoDelay(true);
+      res.socket.setKeepAlive(true);
+    }
+
+    for (const pastEvent of session.logs) {
+      res.write(`data: ${JSON.stringify(pastEvent)}\n\n`);
+    }
+
+    if (session.done) {
+      res.end();
+      return;
+    }
+
+    session.clients.add(res);
+
+    req.on("close", () => {
+      session.clients.delete(res);
+    });
   });
 
   app.get("/api/download/:sessionId", (req, res) => {

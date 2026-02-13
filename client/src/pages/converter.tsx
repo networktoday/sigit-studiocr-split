@@ -135,36 +135,24 @@ export default function Converter() {
         signal: controller.signal,
       });
 
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: "Errore del server" }));
+        throw new Error(errorData.message || "Errore del server");
+      }
+
+      const { sessionId } = await response.json();
+
       setFiles((prev) => prev.map((f) => ({ ...f, status: "processing", progress: 60 })));
       setCurrentPhase("converting");
       setPhaseDetail("Avvio conversione...");
 
-      if (!response.body) {
-        throw new Error("Errore: risposta senza contenuto");
-      }
+      await new Promise<void>((resolve, reject) => {
+        const evtSource = new EventSource(`/api/progress/${sessionId}`);
+        let emailConfirmed = false;
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalResult: ConversionResult | null = null;
-      let streamError: string | null = null;
-      let emailConfirmed = false;
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split("\n\n");
-        buffer = events.pop() || "";
-
-        for (const event of events) {
-          const dataLine = event.split("\n").find(l => l.startsWith("data: "));
-          if (!dataLine) continue;
-          const jsonStr = dataLine.slice(6);
-          if (!jsonStr.trim()) continue;
+        evtSource.onmessage = (e) => {
           try {
-            const parsed = JSON.parse(jsonStr);
+            const parsed = JSON.parse(e.data);
             if (parsed.type === "log") {
               const msg = parsed.message as string;
               setLogMessages((prev) => [...prev, msg]);
@@ -201,34 +189,36 @@ export default function Converter() {
                 setPhaseDetail("Tutti i file sono pronti!");
               }
             } else if (parsed.type === "result") {
-              finalResult = parsed.data;
+              evtSource.close();
+              setConversionResult(parsed.data);
+              setFiles((prev) => prev.map((f) => ({ ...f, status: "done", progress: 100 })));
+              setIsProcessing(false);
+              setIsCompleted(true);
+              setIsStaged(false);
+              setEmailSent(emailConfirmed);
+              toast({
+                title: "Conversione Completata",
+                description: emailConfirmed
+                  ? "File convertiti in PDF/A-1b. Notifica email inviata."
+                  : "Tutti i file sono stati convertiti in formato PDF/A-1b e sono pronti per il download.",
+              });
+              resolve();
             } else if (parsed.type === "error") {
-              streamError = parsed.message;
+              evtSource.close();
+              reject(new Error(parsed.message));
             }
           } catch {}
-        }
-      }
+        };
 
-      if (streamError) {
-        throw new Error(streamError);
-      }
+        evtSource.onerror = () => {
+          evtSource.close();
+          reject(new Error("Connessione al server interrotta"));
+        };
 
-      if (!finalResult) {
-        throw new Error("Nessun risultato ricevuto dal server");
-      }
-
-      setConversionResult(finalResult);
-      setFiles((prev) => prev.map((f) => ({ ...f, status: "done", progress: 100 })));
-      setIsProcessing(false);
-      setIsCompleted(true);
-      setIsStaged(false);
-      setEmailSent(emailConfirmed);
-
-      toast({
-        title: "Conversione Completata",
-        description: emailConfirmed
-          ? "File convertiti in PDF/A-1b. Notifica email inviata."
-          : "Tutti i file sono stati convertiti in formato PDF/A-1b e sono pronti per il download.",
+        controller.signal.addEventListener("abort", () => {
+          evtSource.close();
+          resolve();
+        });
       });
     } catch (err: any) {
       if (err.name === "AbortError") return;
