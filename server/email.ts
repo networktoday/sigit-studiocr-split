@@ -1,44 +1,13 @@
 import sgMail from '@sendgrid/mail';
 
-let connectionSettings: any;
-
-async function getCredentials() {
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY
-    ? 'repl ' + process.env.REPL_IDENTITY
-    : process.env.WEB_REPL_RENEWAL
-    ? 'depl ' + process.env.WEB_REPL_RENEWAL
-    : null;
-
-  if (!xReplitToken) {
-    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
-  }
-
-  connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=sendgrid',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
-      }
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
-
-  if (!connectionSettings || (!connectionSettings.settings.api_key || !connectionSettings.settings.from_email)) {
-    throw new Error('SendGrid not connected');
-  }
-  return { apiKey: connectionSettings.settings.api_key };
-}
-
 const FROM_EMAIL = "pdfasigitconverter@network.today";
 
-async function getUncachableSendGridClient() {
-  const { apiKey } = await getCredentials();
+function initSendGrid() {
+  const apiKey = process.env.SENDGRID_API_KEY;
+  if (!apiKey) {
+    throw new Error('SENDGRID_API_KEY non configurata. Imposta la variabile d\'ambiente SENDGRID_API_KEY.');
+  }
   sgMail.setApiKey(apiKey);
-  return {
-    client: sgMail,
-    fromEmail: FROM_EMAIL
-  };
 }
 
 function escapeHtml(str: string): string {
@@ -76,7 +45,7 @@ export async function sendConversionEmail(data: ConversionEmailData): Promise<vo
     throw new Error('Indirizzo email non valido');
   }
 
-  const { client, fromEmail } = await getUncachableSendGridClient();
+  initSendGrid();
 
   const totalMB = (data.totalSize / 1024 / 1024).toFixed(2);
 
@@ -119,9 +88,9 @@ export async function sendConversionEmail(data: ConversionEmailData): Promise<vo
     </div>
   `;
 
-  await client.send({
+  await sgMail.send({
     to: data.recipientEmail,
-    from: fromEmail,
+    from: FROM_EMAIL,
     subject: `Conversione PDF/A-1b completata — ${data.fileCount} file pront${data.fileCount === 1 ? 'o' : 'i'}`,
     html,
   });
