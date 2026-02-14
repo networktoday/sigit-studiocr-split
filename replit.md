@@ -1,6 +1,6 @@
 # Overview
 
-This is a **PDF to PDF/A-1b Converter** web application (Italian-language UI: "Convertitore PDF/A-1b"). Users upload PDF files through a drag-and-drop interface, and the server converts them to PDF/A-1b format (ISO 19005-1) using Ghostscript with embedded sRGB ICC profile. Large PDFs are automatically split into smaller parts to stay under a **9MB size limit** (mandatory for SIGIT - Tribunale Telematico). The converted files can be downloaded as a ZIP archive. Real-time console logs show conversion progress to the user.
+This is a **PDF to PDF/A-1b Converter** web application (Italian-language UI: "Convertitore PDF/A-1b"). Users upload PDF files through a drag-and-drop interface, and the server converts them to PDF/A-1b format (ISO 19005-1) using Ghostscript with embedded sRGB ICC profile at 150 DPI (/ebook quality). Large PDFs are automatically split into smaller parts to stay under a **9MB size limit** (mandatory for SIGIT - Tribunale Telematico). The converted files can be downloaded as a ZIP archive. Real-time progress is shown via Server-Sent Events (SSE). Optional email notifications via SendGrid on completion.
 
 # User Preferences
 
@@ -16,24 +16,23 @@ Preferred communication style: Simple, everyday language.
 - **State Management**: TanStack React Query for server state; local React state for UI
 - **Animations**: Framer Motion for file upload/processing animations
 - **File Upload**: react-dropzone for drag-and-drop PDF uploads
+- **Real-time Progress**: EventSource API for receiving SSE updates from the server
 - **Fonts**: Inter (sans-serif) and JetBrains Mono (monospace) from Google Fonts
 
 ## Backend
 - **Runtime**: Node.js with Express
 - **Language**: TypeScript, executed via tsx
 - **File Upload Handling**: Multer middleware, storing uploads in `/tmp/pdfa_uploads`
-- **PDF Processing**: Uses `qpdf` system binary (via `child_process.execFile`) to count pages and split large PDFs
+- **PDF Processing**: Ghostscript for PDF/A-1b conversion; qpdf for page counting and splitting large PDFs
 - **File Output**: Converted files stored in `/tmp/pdfa_output`; archiver package creates ZIP downloads for multiple files
 - **Size Limit**: Files over 9MB are automatically split into smaller parts using qpdf
-- **Email Notifications**: Optional email notification via SendGrid (Replit connector) when conversion completes; module in `server/email.ts`
+- **Real-time Progress**: SSE via GET `/api/progress/:sessionId`; in-memory `progressStore` (Map) with broadcast to connected clients
+- **Email Notifications**: Optional email notification via SendGrid (Replit connector) when conversion completes; module in `server/email.ts`; sender: pdfasigitconverter@network.today
 - **API Pattern**: RESTful endpoints under `/api/` prefix
+- **Automatic Cleanup**: Periodic cleanup every 10 minutes removes temporary files older than 1 hour from `/tmp/pdfa_output` and `/tmp/pdfa_uploads`
 
 ## Data Storage
-- **Database Schema**: PostgreSQL via Drizzle ORM, defined in `shared/schema.ts`
-- **Current Tables**: `users` table with id (UUID), username, and password fields
-- **Runtime Storage**: The app currently uses an in-memory storage implementation (`MemStorage`) rather than the database for user operations. The database schema exists but isn't actively connected for the core PDF conversion feature.
-- **Schema Management**: Drizzle Kit with `db:push` command for schema synchronization
-- **Shared Types**: Zod schemas generated from Drizzle schemas via `drizzle-zod` for validation
+- **No database**: This app does not use any database. All data is transient — uploaded files and converted outputs are stored temporarily on disk and automatically cleaned up after 1 hour.
 
 ## Build System
 - **Development**: Vite dev server with HMR proxied through Express; tsx runs the server
@@ -52,8 +51,7 @@ Preferred communication style: Simple, everyday language.
 
 # External Dependencies
 
-- **PostgreSQL**: Required database, connection via `DATABASE_URL` environment variable
-- **Drizzle ORM**: Database ORM with PostgreSQL dialect
+- **Ghostscript**: System-level binary for PDF to PDF/A-1b conversion
 - **qpdf**: System-level binary required for PDF page counting and splitting (must be installed on the system)
 - **Replit Plugins**: `@replit/vite-plugin-runtime-error-modal`, `@replit/vite-plugin-cartographer`, `@replit/vite-plugin-dev-banner` for Replit platform integration
 - **SendGrid**: Email service for conversion completion notifications, connected via Replit connector (`@sendgrid/mail`)
