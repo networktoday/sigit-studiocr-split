@@ -154,7 +154,6 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
     "-sDEVICE=pdfwrite",
     "-dPDFACompatibilityPolicy=1",
     `-dPDFSETTINGS=/ebook`,
-    "-dNumRenderingThreads=4",
     "-dBandBufferSpace=500000000",
     "-dBufferSpace=1000000000",
     "-sBandListStorage=memory",
@@ -171,6 +170,105 @@ async function convertToPdfA(inputPath: string, outputPath: string): Promise<voi
     await execFileAsync("gs", args, { maxBuffer: 500 * 1024 * 1024 });
   } finally {
     try { fs.unlinkSync(tmpDefPath); } catch {}
+  }
+}
+
+// Parallel conversion: divide PDF into chunks and convert them in parallel
+async function convertToPdfAParallel(
+  inputPath: string,
+  outputPath: string,
+  onProgress?: (current: number, total: number) => void
+): Promise<void> {
+  const NUM_WORKERS = 8; // Number of parallel Ghostscript processes (matches available CPUs)
+  const MIN_PAGES_FOR_PARALLEL = 16; // Minimum pages to benefit from parallelization
+
+  const totalPages = await getPageCount(inputPath);
+
+  // If PDF is too small, use single-threaded conversion
+  if (totalPages < MIN_PAGES_FOR_PARALLEL) {
+    return convertToPdfA(inputPath, outputPath);
+  }
+
+  const tmpDir = path.dirname(outputPath);
+  const baseName = path.basename(outputPath, '.pdf');
+
+  // Calculate pages per chunk
+  const pagesPerChunk = Math.ceil(totalPages / NUM_WORKERS);
+  const chunks: { start: number; end: number; chunkPath: string; convertedPath: string }[] = [];
+
+  // Create chunks
+  for (let i = 0; i < NUM_WORKERS; i++) {
+    const start = i * pagesPerChunk + 1;
+    const end = Math.min((i + 1) * pagesPerChunk, totalPages);
+
+    if (start > totalPages) break;
+
+    chunks.push({
+      start,
+      end,
+      chunkPath: path.join(tmpDir, `${baseName}_chunk${i + 1}.pdf`),
+      convertedPath: path.join(tmpDir, `${baseName}_chunk${i + 1}_pdfa.pdf`),
+    });
+  }
+
+  try {
+    // Step 1: Extract chunks in parallel
+    await Promise.all(chunks.map(chunk =>
+      execFileAsync("qpdf", [
+        inputPath,
+        "--pages", inputPath, `${chunk.start}-${chunk.end}`, "--",
+        chunk.chunkPath,
+      ])
+    ));
+
+    // Step 2: Convert chunks in parallel
+    let completed = 0;
+    await Promise.all(chunks.map(async (chunk) => {
+      await convertToPdfA(chunk.chunkPath, chunk.convertedPath);
+      completed++;
+      if (onProgress) onProgress(completed, chunks.length);
+      // Cleanup original chunk
+      try { fs.unlinkSync(chunk.chunkPath); } catch {}
+    }));
+
+    // Step 3: Merge converted chunks
+    if (chunks.length === 1) {
+      // Single chunk, just rename
+      fs.renameSync(chunks[0].convertedPath, outputPath);
+    } else {
+      // Multiple chunks: merge with qpdf first, then reconvert to ensure PDF/A compliance
+      const tempMergedPath = outputPath + ".merged.pdf";
+
+      // Merge chunks with qpdf
+      const qpdfArgs = [
+        chunks[0].convertedPath,
+        "--pages",
+        ...chunks.map(chunk => chunk.convertedPath),
+        "--",
+        tempMergedPath,
+      ];
+
+      await execFileAsync("qpdf", qpdfArgs);
+
+      // Reconvert merged file to PDF/A to ensure compliance
+      // This fixes EOL markers and other compliance issues introduced by qpdf
+      await convertToPdfA(tempMergedPath, outputPath);
+
+      // Cleanup temp merged file
+      try { fs.unlinkSync(tempMergedPath); } catch {}
+    }
+
+    // Cleanup converted chunks
+    for (const chunk of chunks) {
+      try { fs.unlinkSync(chunk.convertedPath); } catch {}
+    }
+  } catch (err) {
+    // Cleanup on error
+    for (const chunk of chunks) {
+      try { fs.unlinkSync(chunk.chunkPath); } catch {}
+      try { fs.unlinkSync(chunk.convertedPath); } catch {}
+    }
+    throw err;
   }
 }
 
@@ -332,7 +430,12 @@ export async function registerRoutes(
         try {
           sendLog(`${fileLabel} Conversione in formato PDF/A-1b in corso...`);
           log(`Converting to PDF/A: ${originalName}`);
-          await convertToPdfA(file.path, tempConvertedPath);
+
+          // Use parallel conversion for better CPU utilization
+          await convertToPdfAParallel(file.path, tempConvertedPath, (current, total) => {
+            sendLog(`${fileLabel} Conversione parallela: ${current}/${total} chunk completati`);
+          });
+
           sendLog(`${fileLabel} Conversione PDF/A-1b completata.`);
         } catch (err: any) {
           log(`Error converting ${originalName}: ${err.message}`);
@@ -367,7 +470,14 @@ export async function registerRoutes(
 
             sendLog(`${fileLabel} Conversione parte ${i + 1}/${pageRanges.length} (pagine ${start}-${end})...`);
             log(`  Converting part ${i + 1} (pages ${start}-${end}) to PDF/A...`);
-            await convertToPdfA(partOrigPath, finalPath);
+
+            // Use parallel conversion for parts too
+            await convertToPdfAParallel(partOrigPath, finalPath, (current, total) => {
+              if (total > 1) {
+                sendLog(`${fileLabel} Parte ${i + 1}: ${current}/${total} chunk completati`);
+              }
+            });
+
             try { fs.unlinkSync(partOrigPath); } catch {}
 
             const partSize = fs.statSync(finalPath).size;

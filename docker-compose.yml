@@ -1,0 +1,11 @@
+name: sigit-studiocr-split
+
+services:
+  app:
+    build: .
+    ports:
+      - "5001:5000"
+    environment:
+      - SENDGRID_API_KEY=${SENDGRID_API_KEY:-la_tua_chiave_api_sendgrid}
+      - PORT=5000
+    restart: unless-stopped
