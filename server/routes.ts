@@ -11,6 +11,26 @@ import { sendConversionEmail, isValidEmail } from "./email";
 
 const execFileAsync = promisify(execFile);
 
+// Wrapper per qpdf che gestisce i warning come successi
+async function execQpdf(args: string[], options?: any): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execFileAsync("qpdf", args, options);
+  } catch (error: any) {
+    // qpdf può restituire exit code != 0 anche con "operation succeeded with warnings"
+    // Se c'è output valido su stdout, lo usiamo
+    if (error.stdout || error.stderr) {
+      const stderr = typeof error.stderr === 'string' ? error.stderr : error.stderr?.toString('utf8') || '';
+      // Controlla se qpdf dice che l'operazione è riuscita con warning
+      if (stderr.includes('operation succeeded with warnings') || stderr.includes('WARNING:')) {
+        const stdout = typeof error.stdout === 'string' ? error.stdout : error.stdout?.toString('utf8') || '';
+        log(`qpdf completed with warnings: ${stderr.substring(0, 200)}`);
+        return { stdout, stderr };
+      }
+    }
+    throw error;
+  }
+}
+
 const UPLOAD_DIR = path.resolve("/tmp/pdfa_uploads");
 const OUTPUT_DIR = path.resolve("/tmp/pdfa_output");
 const MAX_SIZE_BYTES = 9 * 1024 * 1024; // 9 MB
@@ -34,7 +54,7 @@ const upload = multer({
 });
 
 async function getPageCount(pdfPath: string): Promise<number> {
-  const result = await execFileAsync("qpdf", ["--show-npages", pdfPath]);
+  const result = await execQpdf(["--show-npages", pdfPath]);
   return parseInt(result.stdout.trim(), 10);
 }
 
@@ -74,7 +94,7 @@ async function findPageRangesForSize(convertedPdfPath: string, maxSize: number):
   async function extractSize(start: number, end: number): Promise<number> {
     tmpCounter++;
     const tmpPath = path.join(tmpDir, `__size_probe_${tmpCounter}.pdf`);
-    await execFileAsync("qpdf", [
+    await execQpdf([
       convertedPdfPath,
       "--pages", convertedPdfPath, `${start}-${end}`, "--",
       tmpPath,
@@ -214,7 +234,7 @@ async function convertToPdfAParallel(
   try {
     // Step 1: Extract chunks in parallel
     await Promise.all(chunks.map(chunk =>
-      execFileAsync("qpdf", [
+      execQpdf([
         inputPath,
         "--pages", inputPath, `${chunk.start}-${chunk.end}`, "--",
         chunk.chunkPath,
@@ -248,7 +268,7 @@ async function convertToPdfAParallel(
         tempMergedPath,
       ];
 
-      await execFileAsync("qpdf", qpdfArgs);
+      await execQpdf(qpdfArgs);
 
       // Reconvert merged file to PDF/A to ensure compliance
       // This fixes EOL markers and other compliance issues introduced by qpdf
@@ -459,7 +479,7 @@ export async function registerRoutes(
           for (let i = 0; i < pageRanges.length; i++) {
             const { start, end } = pageRanges[i];
             const partOrigPath = path.join(splitDir, `${originalBaseName}_orig_part${i + 1}.pdf`);
-            await execFileAsync("qpdf", [
+            await execQpdf([
               file.path,
               "--pages", file.path, `${start}-${end}`, "--",
               partOrigPath,
