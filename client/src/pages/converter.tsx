@@ -521,7 +521,7 @@ function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
           r.errors.some((e) => e.code === "file-invalid-type")
         );
         if (tooMany) {
-          setRejectionError("Puoi caricare al massimo 50 file PDF alla volta.");
+          setRejectionError("Puoi caricare al massimo 100 file PDF alla volta.");
         } else if (nonPdf.length > 0) {
           const names = nonPdf.map((r) => r.file.name).join(", ");
           setRejectionError(`I seguenti file non sono in formato PDF e non possono essere caricati: ${names}`);
@@ -539,7 +539,7 @@ function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
       "application/pdf": [".pdf"],
     },
     maxSize: 100 * 1024 * 1024,
-    maxFiles: 50,
+    maxFiles: 100,
   });
 
   return (
@@ -582,7 +582,7 @@ function DropzoneArea({ onDrop }: { onDrop: (files: File[]) => void }) {
             <h3 className="text-xl font-semibold">
               {isDragActive ? "Rilascia i file qui..." : "Trascina qui i file PDF"}
             </h3>
-            <p className="text-sm text-muted-foreground">o clicca per sfogliare. MAX 50 file · MAX 100MB per file.</p>
+            <p className="text-sm text-muted-foreground">o clicca per sfogliare. MAX 100 file · MAX 100MB per file.</p>
           </div>
           <div className="flex gap-2 text-xs font-mono text-muted-foreground/60 mt-4">
             <span className="px-2 py-1 bg-muted rounded">PDF 1.4+</span>
