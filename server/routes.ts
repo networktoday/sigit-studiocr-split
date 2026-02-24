@@ -396,7 +396,7 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  app.post("/api/convert", upload.array("files", 20), async (req, res) => {
+  app.post("/api/convert", upload.array("files", 50), async (req, res) => {
     const files = req.files as Express.Multer.File[];
 
     if (!files || files.length === 0) {
